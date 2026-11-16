@@ -57,6 +57,9 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     val runs: StateFlow<Map<String, RunFinishedDto>> = _runs.asStateFlow()
     val exclusions: StateFlow<List<ExclusionRuleDto>> = _exclusions.asStateFlow()
 
+    /** Scope for UI collectors; cancelled when the project closes. */
+    val scope: CoroutineScope get() = cs
+
     @Volatile var repoRoot: String? = null
         private set
     @Volatile private var client: EngineClient? = null

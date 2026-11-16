@@ -186,7 +186,7 @@ public sealed class EngineCore(
                 restore = true;
                 needGraph = false;
             }
-            var graph = _graph;
+            var graph = _graph!;
             if (restore)
             {
                 await build.RestoreAsync(MirrorSolutionPath, ct);
