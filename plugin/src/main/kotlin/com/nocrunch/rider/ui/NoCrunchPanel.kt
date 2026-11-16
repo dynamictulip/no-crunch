@@ -255,7 +255,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         })
         add(simple("Run All Tests", AllIcons.RunConfigurations.TestState.Run_run) { service.runAll() })
-        add(simple("Run All Tests Including Excluded", AllIcons.Actions.RunAll) {
+        add(simple("Run All Tests Including Excluded", RUN_ALL_INCLUDING_EXCLUDED) {
             // Show results for excluded tests too, even if they were hidden.
             if (settings.state.hideExcluded) { settings.state.hideExcluded = false; lastModel = emptyList(); last?.let(::render) }
             service.runAllIncludingExcluded()
@@ -284,6 +284,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         add(simple("Settings", AllIcons.General.Settings) {
             ShowSettingsUtil.getInstance().showSettingsDialog(project, NoCrunchConfigurable::class.java)
         })
+    }
+
+    private companion object {
+        /** The run-all icon with a small "+" badge: run everything, plus the excluded tests. */
+        val RUN_ALL_INCLUDING_EXCLUDED: Icon = com.intellij.ui.LayeredIcon(2).apply {
+            setIcon(AllIcons.RunConfigurations.TestState.Run_run, 0)
+            setIcon(com.intellij.util.IconUtil.scale(AllIcons.General.Add, null, 0.6f), 1, javax.swing.SwingConstants.SOUTH_EAST)
+        }
     }
 
     private fun simple(text: String, icon: Icon, action: () -> Unit) = object : AnAction(text, null, icon) {
