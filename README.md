@@ -1,0 +1,69 @@
+# No Crunch
+
+Lightweight, NCrunch-style continuous testing for .NET in **JetBrains Rider on macOS**.
+
+Save a file and No Crunch rebuilds only the projects your change affects and reruns their tests. All of this happens in an isolated mirror of your repo, so it never touches Rider's own `bin`/`obj` and never blocks the IDE.
+
+- **Project-level impact detection.** A change reruns the tests in the owning project and every test project that depends on it. Changes to repo-wide build files rerun everything.
+- **Isolated builds.** The repo is mirrored into `.nocrunch/<Solution>/mirror/` and each project is built on its own with `BuildProjectReferences=false`, so one broken project doesn't stop unrelated ones.
+- **Microsoft.Testing.Platform (MTP).** Test apps are driven in MTP server mode (JSON-RPC), so you get per-test results, locations and stack traces.
+- **Exclusions.** Untick projects, classes or single tests (e.g. E2E suites) in the tool window. They're saved to `<Solution>.nocrunch.user` next to the `.sln`/`.slnx`. Commit it or ignore it, whichever suits you.
+- **Survives restarts.** Last results show as stale on startup. The engine then catches up on anything that changed while Rider was closed.
+
+## Requirements
+
+- Rider 2026.2+ on macOS
+- .NET 10 SDK (the engine runs on .NET 10). Test projects can target any framework the SDK can build.
+- Test projects on **Microsoft.Testing.Platform 2.x**, e.g. `MSTest.Sdk`, xUnit v3, NUnit or TUnit with the MTP runner. VSTest-only projects show as *unsupported (VSTest)*.
+
+## Install
+
+```bash
+cd plugin
+JAVA_HOME=~/Applications/Rider.app/Contents/jbr/Contents/Home ./gradlew buildPlugin
+```
+
+Then in Rider: **Settings → Plugins → ⚙ → Install Plugin from Disk…** and pick `plugin/build/distributions/no-crunch-rider-<version>.zip`.
+
+Open a solution and the **No Crunch** tool window (bottom) and status bar widget appear. Settings are under **Settings → Tools → No Crunch**: debounce, parallelism and the `dotnet` path.
+
+## What it changes on your machine
+
+- Creates `<repo root>/.nocrunch/` (mirror + state) and adds `.nocrunch/` to `.git/info/exclude`. It never edits `.gitignore`.
+- Writes empty `Directory.Build.props/.targets` and `Directory.Packages.props` into `.nocrunch/`. These stop MSBuild import chains escaping the mirror into your real repo.
+- Adds `.nocrunch` to Rider's *Ignored files and folders*, so the mirror isn't indexed or searched.
+- If you build Docker images from the repo root, add `.nocrunch` to your `.dockerignore`.
+
+## Known gaps (MVP)
+
+- **Runs on save, not as you type.** Rider's idle autosave makes this close.
+- **Project-level impact only.** Coverage-based selection of individual tests is planned.
+- **Snapshot and approval tests** (Verify, Shouldly `ShouldMatchApproved`) write `.received` files inside the mirror. Shouldly's normal assertion messages work fine.
+- **VSTest test projects** aren't run.
+- **Everything not excluded is mirrored, including git-ignored folders.** Large generated folders outside `bin`/`obj`/`node_modules` (e.g. `artifacts/`, `.gradle/`) are copied too.
+
+## Development
+
+```
+engine/NoCrunch.Engine/        C# engine (stdio JSON-RPC server)
+engine/NoCrunch.Engine.Tests/  engine tests (MSTest on MTP)
+plugin/                        Kotlin Rider plugin (bundles the engine)
+samples/Sample Solution/       sample MTP solution used by tests
+docs/superpowers/              design spec and implementation plan
+```
+
+```bash
+dotnet test --solution NoCrunch.slnx
+```
+
+```bash
+cd plugin && JAVA_HOME=~/Applications/Rider.app/Contents/jbr/Contents/Home ./gradlew test buildPlugin
+```
+
+```bash
+cd plugin && ./gradlew runIde -PopenSolution="/path/to/Some.slnx"
+```
+
+The plugin builds against the Rider installed at `~/Applications/Rider.app`. Set `RIDER_PATH` to use a different install.
+
+The engine can be driven without Rider. Run `dotnet engine/NoCrunch.Engine/bin/Debug/net10.0/NoCrunch.Engine.dll` and speak JSON-RPC 2.0 (`Content-Length` framing) on stdio. Start with `initialize {solutionPath}`. See `engine/NoCrunch.Engine/Protocol/EngineServer.cs` for the protocol.
