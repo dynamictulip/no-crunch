@@ -144,4 +144,17 @@ class TestTreeModelTest {
         assertEquals("failed", manualNode.dto.state)
         assertFalse(tree.single { it.path == unit }.children.single().children.single().manual)
     }
+
+    @Test
+    fun manual_results_of_excluded_tests_count_at_every_level() {
+        val manualPass = t(e2e, "B.Flow", "Checkout", "passed").copy(runKind = "manual")
+        val notRun = t(e2e, "B.Flow", "Refund", "excluded")
+        val tree = TestTreeModel.build(listOf(manualPass, notRun), emptyMap(), listOf(ExclusionRuleDto(e2e)), false)
+
+        val project = tree.single()
+        assertEquals(Counts(passed = 1, failed = 0, pending = 0), project.counts)
+        assertEquals(Counts(passed = 1, failed = 0, pending = 0), project.children.single().counts)
+        assertEquals(1, project.manualCount)
+        assertEquals(1, project.children.single().manualCount)
+    }
 }

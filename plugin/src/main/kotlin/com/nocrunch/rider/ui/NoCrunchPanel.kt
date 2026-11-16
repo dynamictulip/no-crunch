@@ -61,7 +61,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 e.presentation.isEnabled = tree.selectionPaths?.isNotEmpty() == true
             }
             override fun actionPerformed(e: AnActionEvent) {
-                selectedTestKeys().takeIf { it.isNotEmpty() }?.let(service::runTests)
+                val keys = selectedTestKeys().takeIf { it.isNotEmpty() } ?: return
+                // Expand what was run so each test's result is visible as it comes in.
+                tree.selectionPaths?.forEach { selected ->
+                    TreeUtil.treeNodeTraverser(selected.lastPathComponent as CheckedTreeNode).forEach { node ->
+                        tree.expandPath(TreePath((node as CheckedTreeNode).path))
+                    }
+                }
+                service.runTests(keys)
             }
         }
     }
@@ -276,6 +283,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     }
                     r.append(o.name, if (o.excluded) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                     appendCounts(o.counts, o.excluded)
+                    appendManual(o.manualCount)
                     when {
                         o.excluded -> r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                         o.buildStatus == "failed" -> r.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
@@ -293,6 +301,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
                     appendCounts(o.counts, o.excluded)
+                    appendManual(o.manualCount)
                 }
                 is TestNode -> {
                     val d = o.dto
@@ -322,6 +331,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             r.append("   ✔ ${c.passed}  ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
             r.append("✖ ${c.failed}", if (c.failed > 0 && !excluded) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
             r.append("  ○ ${c.pending}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+        }
+
+        private fun appendManual(n: Int) {
+            if (n > 0) textRenderer.append("  ▸ $n manual", MANUAL)
         }
 
         private fun stateIcon(c: Counts): Icon = when {

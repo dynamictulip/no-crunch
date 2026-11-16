@@ -5,7 +5,7 @@ import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.RunFinishedDto
 import com.nocrunch.rider.engine.TestResultDto
 
-/** Pending = queued, running, stale or just discovered. Excluded and skipped tests aren't counted. */
+/** Pending = queued, running, stale or just discovered. Skipped tests, and excluded tests that haven't been run by hand, aren't counted. */
 data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0) {
     operator fun plus(o: Counts) = Counts(passed + o.passed, failed + o.failed, pending + o.pending)
 
@@ -19,7 +19,7 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: B
 
     val counts: Counts
         get() = when {
-            excluded -> Counts()
+            excluded && !manual -> Counts()
             dto.state == "passed" -> Counts(passed = 1)
             dto.state == "failed" -> Counts(failed = 1)
             dto.state in PENDING_STATES -> Counts(pending = 1)
@@ -33,6 +33,7 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: B
 
 data class ClassNode(val project: String, val type: String, val excluded: Boolean, val children: List<TestNode>, val locked: Boolean = false) {
     val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
+    val manualCount: Int get() = children.count { it.manual }
 
     /** Rules that toggling this node adds or removes. Tests without a class are excluded one by one (by UID), never the whole project. */
     val rules: List<ExclusionRuleDto>
@@ -50,6 +51,7 @@ data class ProjectNode(
     val children: List<ClassNode>,
 ) {
     val counts: Counts get() = children.fold(Counts()) { acc, c -> acc + c.counts }
+    val manualCount: Int get() = children.sumOf { it.manualCount }
     val rule: ExclusionRuleDto get() = ExclusionRuleDto(path)
 }
 
