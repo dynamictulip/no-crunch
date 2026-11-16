@@ -21,7 +21,7 @@ public class DotnetMsBuildQueryTests
 
         var graph = await ProjectGraph.LoadAsync(layout, query, CancellationToken.None);
 
-        Assert.AreEqual(4, graph.Projects.Count);
+        Assert.AreEqual(6, graph.Projects.Count);
         var coreTests = graph.Projects.Single(p => p.Name == "Shop.Core.Tests");
         Assert.IsTrue(coreTests.IsMtp);
         Assert.IsTrue(coreTests.IsTestProject);
