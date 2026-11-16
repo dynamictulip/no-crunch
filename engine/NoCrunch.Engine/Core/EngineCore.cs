@@ -77,7 +77,8 @@ public sealed class EngineCore(
         lock (_lock)
         {
             _exclusions = set;
-            nowExcluded = _results.Values.Where(r => r.State != TestState.Excluded && set.IsExcluded(r.Id))
+            // A manual result of an excluded test is kept: it's what the user ran by hand.
+            nowExcluded = _results.Values.Where(r => r.State != TestState.Excluded && r.RunKind != RunKind.Manual && set.IsExcluded(r.Id))
                 .Select(r => CarryForward(r with { State = TestState.Excluded }, r)).ToList();
             foreach (var r in nowExcluded) _results[r.Id.Key] = r;
             nowIncluded = _results.Values.Where(r => r.State == TestState.Excluded && !set.IsExcluded(r.Id)).Select(r => r.Id.Key).ToList();

@@ -479,6 +479,28 @@ public class EngineCoreTests
     }
 
     [TestMethod]
+    public async Task Manual_result_of_excluded_test_survives_a_restart()
+    {
+        var exclusions = new ExclusionSet([new ExclusionRule(CoreTests, "T", "A", null)]);
+        var first = await CreateAsync();
+        first.Tests.Tests[CoreTests] = [("A", TestState.Failed), ("B", TestState.Passed)];
+        first.Core.SetExclusions(exclusions);
+        first.Core.RunTests([$"{CoreTests}|T|A"]);
+        await first.Events.WaitIdleAsync();
+        await first.Core.DisposeAsync();
+
+        // Restart: the plugin initialises the engine, then immediately re-sends its exclusions.
+        var second = await CreateAsync(store: first.Store, start: false);
+        await second.Core.StartAsync(CancellationToken.None);
+        second.Core.SetExclusions(exclusions);
+        await second.Events.WaitIdleAsync();
+
+        var a = second.Store.Load()[$"{CoreTests}|T|A"];
+        Assert.AreEqual(RunKind.Manual, a.RunKind, "still the manual result");
+        Assert.AreEqual(TestState.Failed, a.LastOutcome ?? a.State, "its outcome is kept");
+    }
+
+    [TestMethod]
     public async Task Dispose_twice_does_not_throw()
     {
         var h = await CreateAsync();
