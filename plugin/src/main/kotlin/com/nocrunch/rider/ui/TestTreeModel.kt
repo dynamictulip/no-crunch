@@ -42,8 +42,10 @@ data class ClassNode(val project: String, val type: String, val excluded: Boolea
     val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
     val manualCount: Int get() = children.count { it.manual }
     val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
+    /** Why some results below aren't current: running, queued or stale; null when everything is current. */
+    val freshness: String? get() = TestTreeModel.summarise(children.filterNot { it.excluded && !it.manual }.mapNotNull { it.freshness })
     /** Every shown outcome is current (nothing stale, queued or running). */
-    val isFresh: Boolean get() = children.all { it.freshness == null || (it.excluded && !it.manual) }
+    val isFresh: Boolean get() = freshness == null
 
     /** Rules that toggling this node adds or removes. Tests without a class are excluded one by one (by UID), never the whole project. */
     val rules: List<ExclusionRuleDto>
@@ -63,7 +65,8 @@ data class ProjectNode(
     val counts: Counts get() = children.fold(Counts()) { acc, c -> acc + c.counts }
     val manualCount: Int get() = children.sumOf { it.manualCount }
     val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
-    val isFresh: Boolean get() = children.all { it.isFresh }
+    val freshness: String? get() = TestTreeModel.summarise(children.mapNotNull { it.freshness })
+    val isFresh: Boolean get() = freshness == null
     val rule: ExclusionRuleDto get() = ExclusionRuleDto(path)
 }
 
@@ -105,6 +108,14 @@ object TestTreeModel {
             if (failuresOnly && classes.isEmpty() && !buildBroken) return@mapNotNull null
             ProjectNode(path, path.substringAfterLast('/').substringBeforeLast('.'), build?.status, build, runs[path], projectExcluded, classes)
         }.sortedBy { it.name }
+    }
+
+    /** Most important freshness first: running, then queued, then anything else counts as stale. */
+    fun summarise(freshness: Collection<String>): String? = when {
+        freshness.isEmpty() -> null
+        "running" in freshness -> "running"
+        "queued" in freshness -> "queued"
+        else -> "stale"
     }
 
     fun worst(outcomes: Collection<String>): String? = when {

@@ -287,8 +287,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         "building" -> AllIcons.Process.Step_1
                         else -> outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
                     }
-                    r.append(o.name, if (o.excluded) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                    r.append(o.name, when {
+                        o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
+                        o.shownOutcome == "failed" -> if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD
+                        else -> SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
+                    })
                     appendCounts(o.counts, o.excluded)
+                    appendFreshness(o.freshness)
                     appendManual(o.manualCount)
                     when {
                         o.excluded -> r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
@@ -302,11 +307,12 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 is ClassNode -> {
                     r.icon = outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
                     r.append(o.type, when {
-                        o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
-                        o.counts.failed > 0 -> FAILED
+                        o.excluded && o.manualCount == 0 -> SimpleTextAttributes.GRAYED_ATTRIBUTES
+                        o.shownOutcome == "failed" -> if (o.isFresh) FAILED else STALE_FAILED
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
                     appendCounts(o.counts, o.excluded)
+                    appendFreshness(o.freshness)
                     appendManual(o.manualCount)
                 }
                 is TestNode -> {
@@ -317,15 +323,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     }
                     r.append(d.displayName, when {
                         o.excluded && !o.manual -> SimpleTextAttributes.GRAYED_ATTRIBUTES
-                        o.shownOutcome == "failed" -> FAILED
+                        o.shownOutcome == "failed" -> if (o.freshness == null) FAILED else STALE_FAILED
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let {
                         r.append("  ${"%.0f".format(it)} ms", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
-                    o.freshness?.takeIf { o.shownOutcome != null && it != "excluded" }?.let {
-                        r.append("  ${if (it == "running") "running…" else it}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                    }
+                    o.freshness?.takeIf { o.shownOutcome != null && it != "excluded" }?.let { appendFreshness(it) }
                     if (o.manual) r.append("  ▸ manual run", MANUAL)
                     else if (o.excluded) r.append("  excluded", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
@@ -336,6 +340,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, com.intellij.ui.JBColor.RED)
             val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, com.intellij.ui.JBColor.RED)
             val MANUAL = SimpleTextAttributes(SimpleTextAttributes.STYLE_ITALIC, com.intellij.ui.JBColor.BLUE)
+            /** Muted red for failures from an earlier run (stale, queued or running again). */
+            private val STALE_RED = com.intellij.ui.JBColor(java.awt.Color(0xC9, 0x8A, 0x8A), java.awt.Color(0x8C, 0x55, 0x55))
+            val STALE_FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, STALE_RED)
+            val STALE_FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, STALE_RED)
         }
 
         private fun appendCounts(c: Counts, excluded: Boolean) {
@@ -354,6 +362,15 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 else -> return null
             }
             return if (fresh) icon else com.intellij.openapi.util.IconLoader.getTransparentIcon(icon, 0.45f)
+        }
+
+        private fun appendFreshness(freshness: String?) {
+            val text = when (freshness) {
+                null -> return
+                "running" -> "running…"
+                else -> freshness
+            }
+            textRenderer.append("  $text", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
         }
 
         private fun appendManual(n: Int) {

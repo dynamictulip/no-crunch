@@ -182,4 +182,23 @@ class TestTreeModelTest {
         assertFalse(other.isFresh)
         assertEquals("failed", tree.single().shownOutcome)
     }
+
+    @Test
+    fun parent_rows_summarise_freshness_running_then_queued_then_stale() {
+        fun tree(vararg states: String) = TestTreeModel.build(
+            states.mapIndexed { i, st -> t(unit, "A.C", "M$i", st).copy(lastOutcome = "passed") }, emptyMap(), emptyList(), false).single()
+
+        assertEquals("stale", tree("stale", "passed").freshness)
+        assertEquals("stale", tree("stale", "passed").children.single().freshness)
+        assertEquals("queued", tree("stale", "queued").freshness)
+        assertEquals("running", tree("queued", "running", "stale").freshness)
+        assertEquals(null, tree("passed", "failed").freshness)
+    }
+
+    @Test
+    fun excluded_tests_never_run_by_hand_do_not_make_parents_stale() {
+        val tree = TestTreeModel.build(listOf(t(e2e, "B.Flow", "Checkout", "excluded"), t(e2e, "B.Flow", "Other", "passed")),
+            emptyMap(), listOf(ExclusionRuleDto(e2e, "B.Flow", "Checkout")), false).single()
+        assertEquals(null, tree.freshness)
+    }
 }
