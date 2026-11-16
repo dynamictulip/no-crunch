@@ -25,6 +25,21 @@ public class RepoLayoutAndPathMapTests
     }
 
     [TestMethod]
+    public void Resolve_returns_real_paths_through_symlinks()
+    {
+        var real = TempDir.Create();
+        Directory.CreateDirectory(Path.Combine(real, ".git"));
+        File.WriteAllText(Path.Combine(real, "S.slnx"), "");
+        var link = Path.Combine(Path.GetTempPath(), "nocrunch tests", "link-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateSymbolicLink(link, real);
+
+        var layout = RepoLayout.Resolve(Path.Combine(link, "S.slnx"));
+
+        Assert.AreEqual(real, layout.RepoRoot);
+        Assert.AreEqual(Path.Combine(real, "S.slnx"), layout.SolutionPath);
+    }
+
+    [TestMethod]
     public void Resolve_without_git_uses_solution_dir()
     {
         var root = TempDir.Create();
@@ -70,6 +85,6 @@ internal static class TempDir
         var dir = Path.Combine(Path.GetTempPath(), "nocrunch tests", Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         // Resolve /var -> /private/var so path comparisons are stable on macOS.
-        return new DirectoryInfo(dir).ResolveLinkTarget(true)?.FullName ?? Path.GetFullPath(dir);
+        return NoCrunch.Engine.Layout.RealPath.Of(dir);
     }
 }

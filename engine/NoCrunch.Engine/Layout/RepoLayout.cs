@@ -12,7 +12,7 @@ public sealed record RepoLayout(
 {
     public static RepoLayout Resolve(string solutionPath)
     {
-        var sln = Path.GetFullPath(solutionPath);
+        var sln = RealPath.Of(solutionPath);
         var slnDir = Path.GetDirectoryName(sln)!;
         var gitRoot = FindGitRoot(slnDir);
         var root = gitRoot ?? slnDir;

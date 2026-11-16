@@ -1,0 +1,97 @@
+using NoCrunch.Engine.Build;
+using NoCrunch.Engine.Testing;
+using NoCrunch.Engine.Tests.TestSupport;
+
+namespace NoCrunch.Engine.Tests.Testing;
+
+[TestClass]
+public class MtpTestRunnerIntegrationTests
+{
+    private static MirroredSample _sample = null!;
+
+    [ClassInitialize]
+    public static async Task Init(TestContext _)
+    {
+        _sample = await MirroredSample.CreateAsync();
+        await _sample.BuildAllAsync();
+    }
+
+    private static async Task<(ProjectRunOutcome outcome, List<TestResultUpdate> updates)> Run(
+        MirroredSample sample, string project, Func<TestId, bool>? shouldRun = null, CancellationToken ct = default)
+    {
+        var updates = new List<TestResultUpdate>();
+        var runner = new MtpTestRunner(sample.Map);
+        var info = sample.Graph.Projects.Single(p => p.Name == project);
+        var outcome = await runner.RunAsync(info, shouldRun ?? (_ => true),
+            batch => { lock (updates) updates.AddRange(batch); return Task.CompletedTask; }, ct);
+        return (outcome, updates);
+    }
+
+    private static Dictionary<string, TestResultUpdate> Final(IEnumerable<TestResultUpdate> updates) =>
+        updates.GroupBy(u => u.Id.Key).ToDictionary(g => g.Key, g => g.Last());
+
+    [TestMethod]
+    [Timeout(120_000)]
+    public async Task Discovers_and_runs_sample_core_tests()
+    {
+        var (outcome, updates) = await Run(_sample, "Shop.Core.Tests");
+
+        Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
+        var final = Final(updates).Values.ToList();
+        Assert.AreEqual(2, final.Count);
+        foreach (var r in final)
+        {
+            Assert.AreEqual(TestState.Passed, r.State, r.Message + "\n" + r.StackTrace);
+            Assert.AreEqual("Shop.Core.Tests.PriceCalculatorTests", r.Id.Type);
+            Assert.AreEqual("tests/Shop.Core.Tests/Shop.Core.Tests.csproj", r.Id.Project);
+            Assert.IsNotNull(r.FilePath);
+            StringAssert.StartsWith(r.FilePath, _sample.Layout.RepoRoot);
+            Assert.IsFalse(r.FilePath!.Contains(".nocrunch"), r.FilePath);
+        }
+        CollectionAssert.AreEquivalent(new[] { "Total_multiplies", "Total_zero_qty" }, final.Select(r => r.Id.Method).ToArray());
+    }
+
+    [TestMethod]
+    [Timeout(120_000)]
+    public async Task ShouldRun_false_reports_excluded_and_does_not_run()
+    {
+        var (outcome, updates) = await Run(_sample, "Shop.Core.Tests", id => id.Method != "Total_zero_qty");
+
+        Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
+        var final = Final(updates);
+        Assert.AreEqual(TestState.Excluded, final.Values.Single(r => r.Id.Method == "Total_zero_qty").State);
+        Assert.AreEqual(TestState.Passed, final.Values.Single(r => r.Id.Method == "Total_multiplies").State);
+        Assert.IsFalse(updates.Any(u => u.Id.Method == "Total_zero_qty" && u.State is TestState.Passed or TestState.Running));
+    }
+
+    [TestMethod]
+    [Timeout(300_000)]
+    public async Task Failing_test_reports_message_and_repo_stack()
+    {
+        var sample = await MirroredSample.CreateAsync();
+        var calc = Path.Combine(sample.Layout.MirrorRoot, "src/Shop.Core/PriceCalculator.cs");
+        File.WriteAllText(calc, File.ReadAllText(calc).Replace("unit * qty", "unit + qty"));
+        await sample.BuildAllAsync();
+
+        var (outcome, updates) = await Run(sample, "Shop.Core.Tests");
+
+        Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
+        var failed = Final(updates).Values.Single(r => r.Id.Method == "Total_multiplies");
+        Assert.AreEqual(TestState.Failed, failed.State);
+        Assert.IsFalse(string.IsNullOrEmpty(failed.Message));
+        Assert.IsNotNull(failed.StackTrace);
+        Assert.IsFalse(failed.StackTrace!.Contains(".nocrunch"), failed.StackTrace);
+    }
+
+    [TestMethod]
+    [Timeout(60_000)]
+    public async Task Cancellation_returns_Cancelled()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        var (outcome, _) = await Run(_sample, "Shop.Core.Tests", ct: cts.Token);
+
+        Assert.AreEqual(ProjectRunStatus.Cancelled, outcome.Status);
+    }
+}
