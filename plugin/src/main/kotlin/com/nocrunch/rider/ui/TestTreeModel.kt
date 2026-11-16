@@ -21,7 +21,12 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: B
     val shownOutcome: String? get() = if (dto.state in OUTCOMES) dto.state else dto.lastOutcome
 
     /** Null when [shownOutcome] is current; otherwise why it isn't (stale, queued, running, ...). */
-    val freshness: String? get() = if (dto.state in OUTCOMES) null else dto.state.takeIf { it != "excluded" || dto.lastOutcome != null }
+    val freshness: String? get() = when {
+        dto.state in OUTCOMES -> null
+        // Excluded tests have no result this session until you run them by hand.
+        dto.state == "excluded" -> "stale"
+        else -> dto.state
+    }
 
     val counts: Counts
         get() = when {

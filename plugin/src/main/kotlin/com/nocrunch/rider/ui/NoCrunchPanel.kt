@@ -343,7 +343,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 is TestNode -> {
                     val d = o.dto
                     r.icon = when {
-                        o.excluded && !o.manual && o.shownOutcome == null -> AllIcons.RunConfigurations.TestIgnored
+                        o.excluded && !o.manual && o.shownOutcome == null -> AllIcons.RunConfigurations.TestUnknown
                         else -> outcomeIcon(o.shownOutcome, o.freshness == null) ?: testIcon(d.state)
                     }
                     r.append(d.displayName, when {
@@ -354,9 +354,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let {
                         r.append("  ${"%.0f".format(it)} ms", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
-                    o.freshness?.takeIf { o.shownOutcome != null && it != "excluded" }?.let { appendFreshness(it) }
+                    appendFreshness(o.freshness)
                     if (o.manual) r.append("  ▸ manual run", MANUAL)
-                    else if (o.excluded) r.append("  excluded", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
             }
         }

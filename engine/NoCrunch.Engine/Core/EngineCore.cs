@@ -47,7 +47,11 @@ public sealed class EngineCore(
         var stored = store.Load();
         lock (_lock)
         {
-            foreach (var (key, r) in stored) _results[key] = CarryForward(r with { State = TestState.Stale }, r);
+            foreach (var (key, r) in stored)
+                _results[key] = IsExcludedResult(r)
+                    // Excluded tests start every session blank: no result from earlier (manual) runs.
+                    ? new TestResultUpdate(r.Id, r.DisplayName, TestState.Stale, null, null, null, r.FilePath, r.Line)
+                    : CarryForward(r with { State = TestState.Stale }, r);
             _pending.Reconcile = true;
             _pending.Initialize = true;
             _pending.NeedGraph = true;
@@ -403,6 +407,9 @@ public sealed class EngineCore(
             Line = incoming.Line ?? previous.Line,
         };
     }
+
+    /// <summary>Stored results that belong to excluded tests: manual runs, or tests last seen as excluded.</summary>
+    private static bool IsExcludedResult(TestResultUpdate r) => r.RunKind == RunKind.Manual || r.State == TestState.Excluded;
 
     private static string ProjectOfKey(string key) => key[..key.IndexOf('|')];
 

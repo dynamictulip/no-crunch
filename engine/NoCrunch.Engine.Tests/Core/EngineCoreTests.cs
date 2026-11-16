@@ -479,25 +479,32 @@ public class EngineCoreTests
     }
 
     [TestMethod]
-    public async Task Manual_result_of_excluded_test_survives_a_restart()
+    public async Task Excluded_tests_start_each_session_stale_with_no_result()
     {
         var exclusions = new ExclusionSet([new ExclusionRule(CoreTests, "T", "A", null)]);
         var first = await CreateAsync();
         first.Tests.Tests[CoreTests] = [("A", TestState.Failed), ("B", TestState.Passed)];
+        first.Tests.FailureMessage = "boom";
         first.Core.SetExclusions(exclusions);
         first.Core.RunTests([$"{CoreTests}|T|A"]);
         await first.Events.WaitIdleAsync();
+        Assert.AreEqual(RunKind.Manual, first.Store.Load()[$"{CoreTests}|T|A"].RunKind, "manual result kept during the session");
         await first.Core.DisposeAsync();
 
         // Restart: the plugin initialises the engine, then immediately re-sends its exclusions.
         var second = await CreateAsync(store: first.Store, start: false);
         await second.Core.StartAsync(CancellationToken.None);
+        var shownAtStartup = second.Events.Results.Last(r => r.Id.Method == "A");
         second.Core.SetExclusions(exclusions);
         await second.Events.WaitIdleAsync();
 
+        Assert.AreEqual(TestState.Stale, shownAtStartup.State);
+        Assert.IsNull(shownAtStartup.LastOutcome, "no previous result shown for an excluded test");
         var a = second.Store.Load()[$"{CoreTests}|T|A"];
-        Assert.AreEqual(RunKind.Manual, a.RunKind, "still the manual result");
-        Assert.AreEqual(TestState.Failed, a.LastOutcome ?? a.State, "its outcome is kept");
+        Assert.AreEqual(RunKind.Auto, a.RunKind);
+        Assert.IsNull(a.LastOutcome);
+        Assert.IsNull(a.Message);
+        Assert.AreEqual(TestState.Passed, second.Store.Load()[$"{CoreTests}|T|B"].State, "non-excluded tests run as normal");
     }
 
     [TestMethod]
