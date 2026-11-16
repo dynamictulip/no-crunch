@@ -9,4 +9,15 @@
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.rider</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="com.nocrunch.rider.NoCrunchStartup"/>
+        <projectConfigurable parentId="tools" instance="com.nocrunch.rider.settings.NoCrunchConfigurable"
+                             id="com.nocrunch.rider.settings" displayName="No Crunch"/>
+    </extensions>
+
+    <projectListeners>
+        <listener class="com.nocrunch.rider.files.FileChangeForwarder"
+                  topic="com.intellij.openapi.vfs.newvfs.BulkFileListener"/>
+    </projectListeners>
 </idea-plugin>

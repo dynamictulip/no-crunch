@@ -96,6 +96,7 @@ public class EngineCoreTests
         public ConcurrentQueue<string> Log { get; } = new();
         public ConcurrentQueue<TestResultUpdate> Results { get; } = new();
         public ConcurrentQueue<ProjectRunOutcome> RunsFinished { get; } = new();
+        public ConcurrentQueue<(string project, int count)> Discoveries { get; } = new();
         private int _idle;
         public SemaphoreSlim IdleSignal { get; } = new(0);
 
@@ -107,7 +108,12 @@ public class EngineCoreTests
         }
         public Task ProjectBuildStarted(string project) => Task.CompletedTask;
         public Task ProjectBuildFinished(BuildOutcome outcome) { Log.Enqueue("built:" + outcome.Project + ":" + outcome.Status); return Task.CompletedTask; }
-        public Task TestsDiscovered(string project, IReadOnlyList<TestResultUpdate> tests) { foreach (var t in tests) Results.Enqueue(t); return Task.CompletedTask; }
+        public Task TestsDiscovered(string project, IReadOnlyList<TestResultUpdate> tests)
+        {
+            Discoveries.Enqueue((project, tests.Count));
+            foreach (var t in tests) Results.Enqueue(t);
+            return Task.CompletedTask;
+        }
         public Task TestResults(IReadOnlyList<TestResultUpdate> updates) { foreach (var u in updates) Results.Enqueue(u); return Task.CompletedTask; }
         public Task ProjectRunFinished(ProjectRunOutcome outcome) { RunsFinished.Enqueue(outcome); return Task.CompletedTask; }
         public Task Log_(string level, string message) => Task.CompletedTask;
@@ -284,9 +290,11 @@ public class EngineCoreTests
         Assert.AreEqual(TestState.Excluded, h.Events.Results.Last(r => r.Id.Method == "A").State);
 
         Drain(h);
+        while (h.Events.Discoveries.TryDequeue(out _)) { }
         h.Core.RunTests([$"{CoreTests}|T|A"]);
         await h.Events.WaitIdleAsync();
         CollectionAssert.AreEquivalent(new[] { $"{CoreTests}|T|A" }, h.Tests.Executed.ToArray());
+        Assert.AreEqual(0, h.Events.Discoveries.Count, "a manual-only run must not replace the project's test list");
     }
 
     [TestMethod]

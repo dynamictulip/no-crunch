@@ -13,4 +13,6 @@ server.Attach(rpc);
 rpc.StartListening();
 
 await Task.WhenAny(rpc.Completion, server.ShutdownRequested);
+// Let the reply to `shutdown` reach the client before the process exits.
+if (server.ShutdownRequested.IsCompleted) await Task.WhenAny(rpc.Completion, Task.Delay(500));
 return 0;

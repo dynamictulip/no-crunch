@@ -11,9 +11,16 @@ class EngineProcess(private val dotnet: String, private val engineDll: Path, pri
     @Volatile private var stopping = false
 
     fun start(): EngineClient {
-        val p = ProcessBuilder(dotnet, engineDll.toString())
-            .redirectError(ProcessBuilder.Redirect.PIPE)
-            .start()
+        val builder = ProcessBuilder(dotnet, engineDll.toString()).redirectError(ProcessBuilder.Redirect.PIPE)
+        // GUI apps on macOS don't inherit the shell PATH; the engine and its children (MSBuild, test hosts) need dotnet on it.
+        val dotnetFile = java.io.File(dotnet)
+        if (dotnetFile.isAbsolute) {
+            val env = builder.environment()
+            val dir = dotnetFile.canonicalFile.parent
+            env["PATH"] = dir + java.io.File.pathSeparator + env["PATH"].orEmpty()
+            env.putIfAbsent("DOTNET_ROOT", dir)
+        }
+        val p = builder.start()
         process = p
         Thread({ p.errorStream.bufferedReader().forEachLine { log.info("[engine] $it") } }, "NoCrunch engine stderr")
             .apply { isDaemon = true; start() }

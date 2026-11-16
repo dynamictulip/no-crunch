@@ -310,7 +310,8 @@ public sealed class EngineCore(
                             _results[r.Id.Key] = r;
                         }
                     }
-                    await events.TestsDiscovered(project.RepoRelativePath, manualOnly ? batch.Where(r => manualKeys.Contains(r.Id.Key)).ToList() : batch);
+                    if (manualOnly) await events.TestResults(batch.Where(r => manualKeys.Contains(r.Id.Key)).ToList());
+                    else await events.TestsDiscovered(project.RepoRelativePath, batch);
                 }
                 else
                 {
