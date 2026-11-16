@@ -33,7 +33,12 @@ public sealed record TestResultUpdate(
     string? StackTrace,
     string? FilePath,
     int? Line,
-    RunKind RunKind = RunKind.Auto);
+    RunKind RunKind = RunKind.Auto,
+    TestState? LastOutcome = null)
+{
+    /// <summary>A finished state: the test actually ran.</summary>
+    public bool IsOutcome => State is TestState.Passed or TestState.Failed or TestState.Skipped;
+}
 
 public enum ProjectRunStatus { Completed, Cancelled, Crashed, UnsupportedMtpVersion, UnsupportedNotMtp }
 

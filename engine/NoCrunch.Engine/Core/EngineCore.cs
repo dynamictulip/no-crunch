@@ -47,7 +47,7 @@ public sealed class EngineCore(
         var stored = store.Load();
         lock (_lock)
         {
-            foreach (var (key, r) in stored) _results[key] = r with { State = TestState.Stale };
+            foreach (var (key, r) in stored) _results[key] = CarryForward(r with { State = TestState.Stale }, r);
             _pending.Reconcile = true;
             _pending.Initialize = true;
             _pending.NeedGraph = true;
@@ -78,7 +78,7 @@ public sealed class EngineCore(
         {
             _exclusions = set;
             nowExcluded = _results.Values.Where(r => r.State != TestState.Excluded && set.IsExcluded(r.Id))
-                .Select(r => r with { State = TestState.Excluded }).ToList();
+                .Select(r => CarryForward(r with { State = TestState.Excluded }, r)).ToList();
             foreach (var r in nowExcluded) _results[r.Id.Key] = r;
             nowIncluded = _results.Values.Where(r => r.State == TestState.Excluded && !set.IsExcluded(r.Id)).Select(r => r.Id.Key).ToList();
         }
@@ -348,18 +348,23 @@ public sealed class EngineCore(
                             // An automatic run skips excluded tests; keep the result of an earlier manual run of them.
                             var keep = r.State == TestState.Excluded && hasPrevious && prev!.RunKind == RunKind.Manual
                                        && prev.State != TestState.Excluded;
-                            var current = keep ? prev! : r;
+                            var current = keep ? prev! : CarryForward(r, hasPrevious ? prev : null);
                             _results[r.Id.Key] = current;
                             discovered.Add(current);
                         }
                     }
-                    if (manualOnly) await events.TestResults(batch.Where(r => runKeys.Contains(r.Id.Key)).ToList());
+                    if (manualOnly) await events.TestResults(discovered.Where(r => runKeys.Contains(r.Id.Key)).ToList());
                     else await events.TestsDiscovered(project.RepoRelativePath, discovered);
                 }
                 else
                 {
-                    lock (_lock) foreach (var r in batch) _results[r.Id.Key] = r;
-                    await events.TestResults(batch);
+                    List<TestResultUpdate> merged;
+                    lock (_lock)
+                    {
+                        merged = batch.Select(r => CarryForward(r, _results.GetValueOrDefault(r.Id.Key))).ToList();
+                        foreach (var r in merged) _results[r.Id.Key] = r;
+                    }
+                    await events.TestResults(merged);
                 }
             }, ct);
         if (!ct.IsCancellationRequested) await events.ProjectRunFinished(outcome);
@@ -372,10 +377,30 @@ public sealed class EngineCore(
         {
             stale = _results.Values
                 .Where(r => dirty.Contains(r.Id.Project) && r.State is not (TestState.Excluded or TestState.Stale))
-                .Select(r => r with { State = TestState.Stale }).ToList();
+                .Select(r => CarryForward(r with { State = TestState.Stale }, r)).ToList();
             foreach (var r in stale) _results[r.Id.Key] = r;
         }
         if (stale.Count > 0) await events.TestResults(stale);
+    }
+
+    /// <summary>
+    /// While a test is stale, queued, running or excluded it keeps showing its last outcome (and that run's message,
+    /// stack trace and duration) so the user can still see what happened last time.
+    /// </summary>
+    private static TestResultUpdate CarryForward(TestResultUpdate incoming, TestResultUpdate? previous)
+    {
+        if (incoming.IsOutcome || previous is null) return incoming;
+        var last = previous.IsOutcome ? previous.State : previous.LastOutcome;
+        if (last is null) return incoming;
+        return incoming with
+        {
+            LastOutcome = last,
+            Message = incoming.Message ?? previous.Message,
+            StackTrace = incoming.StackTrace ?? previous.StackTrace,
+            DurationMs = incoming.DurationMs ?? previous.DurationMs,
+            FilePath = incoming.FilePath ?? previous.FilePath,
+            Line = incoming.Line ?? previous.Line,
+        };
     }
 
     private static string ProjectOfKey(string key) => key[..key.IndexOf('|')];

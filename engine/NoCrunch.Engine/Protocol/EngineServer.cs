@@ -18,10 +18,11 @@ public sealed record RunTestsParams(string[] Keys);
 
 public sealed record TestResultDto(
     string Key, string Project, string? Type, string? Method, string Uid, string? Variant, string DisplayName,
-    TestState State, double? DurationMs, string? Message, string? StackTrace, string? FilePath, int? Line, RunKind RunKind)
+    TestState State, double? DurationMs, string? Message, string? StackTrace, string? FilePath, int? Line, RunKind RunKind,
+    TestState? LastOutcome)
 {
     public static TestResultDto From(TestResultUpdate u) => new(u.Id.Key, u.Id.Project, u.Id.Type, u.Id.Method, u.Id.Uid, u.Id.Variant,
-        u.DisplayName, u.State, u.DurationMs, u.Message, u.StackTrace, u.FilePath, u.Line, u.RunKind);
+        u.DisplayName, u.State, u.DurationMs, u.Message, u.StackTrace, u.FilePath, u.Line, u.RunKind, u.LastOutcome);
 }
 
 /// <summary>

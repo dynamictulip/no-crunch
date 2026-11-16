@@ -17,6 +17,12 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: B
     /** The result comes from a run the user asked for, not from continuous testing. */
     val manual: Boolean get() = dto.runKind == "manual"
 
+    /** Outcome to show: the current one, or the last one while the test is stale/queued/running. */
+    val shownOutcome: String? get() = if (dto.state in OUTCOMES) dto.state else dto.lastOutcome
+
+    /** Null when [shownOutcome] is current; otherwise why it isn't (stale, queued, running, ...). */
+    val freshness: String? get() = if (dto.state in OUTCOMES) null else dto.state.takeIf { it != "excluded" || dto.lastOutcome != null }
+
     val counts: Counts
         get() = when {
             excluded && !manual -> Counts()
@@ -28,12 +34,16 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: B
 
     private companion object {
         val PENDING_STATES = setOf("queued", "running", "stale", "discovered")
+        val OUTCOMES = setOf("passed", "failed", "skipped")
     }
 }
 
 data class ClassNode(val project: String, val type: String, val excluded: Boolean, val children: List<TestNode>, val locked: Boolean = false) {
     val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
     val manualCount: Int get() = children.count { it.manual }
+    val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
+    /** Every shown outcome is current (nothing stale, queued or running). */
+    val isFresh: Boolean get() = children.all { it.freshness == null || (it.excluded && !it.manual) }
 
     /** Rules that toggling this node adds or removes. Tests without a class are excluded one by one (by UID), never the whole project. */
     val rules: List<ExclusionRuleDto>
@@ -52,6 +62,8 @@ data class ProjectNode(
 ) {
     val counts: Counts get() = children.fold(Counts()) { acc, c -> acc + c.counts }
     val manualCount: Int get() = children.sumOf { it.manualCount }
+    val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
+    val isFresh: Boolean get() = children.all { it.isFresh }
     val rule: ExclusionRuleDto get() = ExclusionRuleDto(path)
 }
 
@@ -93,6 +105,13 @@ object TestTreeModel {
             if (failuresOnly && classes.isEmpty() && !buildBroken) return@mapNotNull null
             ProjectNode(path, path.substringAfterLast('/').substringBeforeLast('.'), build?.status, build, runs[path], projectExcluded, classes)
         }.sortedBy { it.name }
+    }
+
+    fun worst(outcomes: Collection<String>): String? = when {
+        "failed" in outcomes -> "failed"
+        "passed" in outcomes -> "passed"
+        "skipped" in outcomes -> "skipped"
+        else -> null
     }
 
     /** Same matching as the engine's ExclusionSet. */

@@ -188,7 +188,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             is TestNode -> {
                 val d = o.dto
                 val text = buildString {
-                    append(d.displayName).append(" — ").append(d.state)
+                    append(d.displayName).append(" — ")
+                    when {
+                        o.freshness == null -> append(d.state)
+                        o.shownOutcome != null -> append("last result: ").append(o.shownOutcome).append(" (").append(o.freshness)
+                            .append(if (o.freshness == "stale") " — the code changed since this ran" else "").append(")")
+                        else -> append(d.state)
+                    }
                     d.durationMs?.let { append(" (${"%.0f".format(it)} ms)") }
                     append('\n')
                     append(if (o.manual) "Result from a manual run" else "Result from an automatic run")
@@ -279,7 +285,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         "failed" -> AllIcons.General.Error
                         "blocked" -> AllIcons.General.Warning
                         "building" -> AllIcons.Process.Step_1
-                        else -> stateIcon(o.counts)
+                        else -> outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
                     }
                     r.append(o.name, if (o.excluded) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                     appendCounts(o.counts, o.excluded)
@@ -294,7 +300,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     }
                 }
                 is ClassNode -> {
-                    r.icon = stateIcon(o.counts)
+                    r.icon = outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
                     r.append(o.type, when {
                         o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
                         o.counts.failed > 0 -> FAILED
@@ -305,14 +311,20 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 }
                 is TestNode -> {
                     val d = o.dto
-                    r.icon = if (o.excluded && !o.manual) AllIcons.RunConfigurations.TestIgnored else testIcon(d.state)
+                    r.icon = when {
+                        o.excluded && !o.manual && o.shownOutcome == null -> AllIcons.RunConfigurations.TestIgnored
+                        else -> outcomeIcon(o.shownOutcome, o.freshness == null) ?: testIcon(d.state)
+                    }
                     r.append(d.displayName, when {
-                        o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
-                        d.state == "failed" -> FAILED
+                        o.excluded && !o.manual -> SimpleTextAttributes.GRAYED_ATTRIBUTES
+                        o.shownOutcome == "failed" -> FAILED
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
-                    d.durationMs?.takeIf { d.state == "passed" || d.state == "failed" }?.let {
+                    d.durationMs?.takeIf { o.shownOutcome != null }?.let {
                         r.append("  ${"%.0f".format(it)} ms", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    }
+                    o.freshness?.takeIf { o.shownOutcome != null && it != "excluded" }?.let {
+                        r.append("  ${if (it == "running") "running…" else it}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                     }
                     if (o.manual) r.append("  ▸ manual run", MANUAL)
                     else if (o.excluded) r.append("  excluded", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
@@ -331,6 +343,17 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             r.append("   ✔ ${c.passed}  ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
             r.append("✖ ${c.failed}", if (c.failed > 0 && !excluded) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
             r.append("  ○ ${c.pending}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+        }
+
+        /** Outcome icon, faded when the result is from an earlier run (stale/queued/running). */
+        private fun outcomeIcon(outcome: String?, fresh: Boolean): Icon? {
+            val icon = when (outcome) {
+                "passed" -> AllIcons.RunConfigurations.TestPassed
+                "failed" -> AllIcons.RunConfigurations.TestError
+                "skipped" -> AllIcons.RunConfigurations.TestSkipped
+                else -> return null
+            }
+            return if (fresh) icon else com.intellij.openapi.util.IconLoader.getTransparentIcon(icon, 0.45f)
         }
 
         private fun appendManual(n: Int) {

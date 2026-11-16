@@ -95,6 +95,7 @@ public class EngineCoreTests
             [Other] = [("O", TestState.Passed)],
         };
         public ConcurrentBag<string> Executed { get; } = [];
+        public string? FailureMessage { get; set; }
 
         public async Task<ProjectRunOutcome> RunAsync(ProjectInfo project, Func<TestId, bool> shouldRun,
             Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct)
@@ -104,7 +105,8 @@ public class EngineCoreTests
             await onUpdates(ids.Select(t => U(t.id, shouldRun(t.id) ? TestState.Queued : TestState.Excluded)).ToList());
             var ran = ids.Where(t => shouldRun(t.id)).ToList();
             foreach (var t in ran) Executed.Add(t.id.Key);
-            if (ran.Count > 0) await onUpdates(ran.Select(t => U(t.id, t.state)).ToList());
+            if (ran.Count > 0)
+                await onUpdates(ran.Select(t => U(t.id, t.state) with { Message = t.state == TestState.Failed ? FailureMessage : null }).ToList());
             return new ProjectRunOutcome(project.RepoRelativePath, ProjectRunStatus.Completed, null);
         }
     }
@@ -208,6 +210,7 @@ public class EngineCoreTests
 
         var first = h.Events.Results.First(r => r.Id.Key == old.Id.Key);
         Assert.AreEqual(TestState.Stale, first.State, "stored results are shown stale first");
+        Assert.AreEqual(TestState.Passed, first.LastOutcome, "the previous outcome is kept while stale");
         CollectionAssert.Contains(h.Tests.Runs.ToArray(), CoreTests, "test project without stored results runs");
         CollectionAssert.Contains(h.Tests.Runs.ToArray(), Other, "every test project runs once startup has finished");
         Assert.AreEqual(TestState.Passed, h.Events.Results.Last(r => r.Id.Key == old.Id.Key).State, "stale result is replaced");
@@ -454,6 +457,25 @@ public class EngineCoreTests
         Assert.AreEqual(RunKind.Manual, afterAuto.RunKind, "an automatic run must not replace a manual result");
         Assert.AreEqual(TestState.Stale, afterAuto.State, "the code changed since the manual run");
         Assert.AreEqual(RunKind.Auto, h.Store.Load()[$"{CoreTests}|T|B"].RunKind);
+    }
+
+    [TestMethod]
+    public async Task Stale_queued_and_running_results_keep_the_last_outcome_and_message()
+    {
+        var h = await CreateAsync();
+        h.Tests.Tests[Other] = [("O", TestState.Failed)];
+        h.Tests.FailureMessage = "expected 1 but was 2";
+        h.Core.RunAll();
+        await h.Events.WaitIdleAsync();
+        Drain(h);
+
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        var interim = h.Events.Results.Where(r => r.Id.Method == "O" && r.State is TestState.Stale or TestState.Queued).ToList();
+        Assert.IsTrue(interim.Count >= 2, "stale then queued");
+        Assert.IsTrue(interim.All(r => r.LastOutcome == TestState.Failed), "last outcome carried through stale and queued");
+        Assert.IsTrue(interim.All(r => r.Message == "expected 1 but was 2"), "last failure message carried too");
     }
 
     [TestMethod]

@@ -157,4 +157,29 @@ class TestTreeModelTest {
         assertEquals(1, project.manualCount)
         assertEquals(1, project.children.single().manualCount)
     }
+
+    @Test
+    fun stale_tests_show_their_last_outcome_and_are_marked_not_fresh() {
+        val staleFail = t(unit, "A.Calc", "Adds", "stale").copy(lastOutcome = "failed")
+        val queuedPass = t(unit, "A.Calc", "Subtracts", "queued").copy(lastOutcome = "passed")
+        val neverRun = t(unit, "A.Other", "New", "queued")
+        val fresh = t(unit, "A.Other", "Works", "passed")
+        val tree = TestTreeModel.build(listOf(staleFail, queuedPass, neverRun, fresh), emptyMap(), emptyList(), false)
+        val calc = tree.single().children.single { it.type == "A.Calc" }
+        val other = tree.single().children.single { it.type == "A.Other" }
+        fun node(m: String) = tree.single().children.flatMap { it.children }.single { it.dto.method == m }
+
+        assertEquals("failed", node("Adds").shownOutcome)
+        assertEquals("stale", node("Adds").freshness)
+        assertEquals("passed", node("Subtracts").shownOutcome)
+        assertEquals("queued", node("Subtracts").freshness)
+        assertEquals(null, node("New").shownOutcome)
+        assertEquals(null, node("Works").freshness)
+
+        assertEquals("failed", calc.shownOutcome, "worst last outcome")
+        assertFalse(calc.isFresh)
+        assertEquals("passed", other.shownOutcome)
+        assertFalse(other.isFresh)
+        assertEquals("failed", tree.single().shownOutcome)
+    }
 }

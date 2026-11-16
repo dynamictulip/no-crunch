@@ -27,6 +27,8 @@ data class TestResultDto(
     val line: Int?,
     /** auto (continuous run) or manual (the user asked for it). */
     val runKind: String? = "auto",
+    /** The last finished outcome (passed/failed/skipped) while the test is stale, queued, running or excluded. */
+    val lastOutcome: String? = null,
 )
 
 /** status: succeeded, failed, blocked, cancelled */
