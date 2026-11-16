@@ -96,4 +96,21 @@ class TestTreeModelTest {
         assertEquals(TestTreeModel.UNKNOWN_CLASS, cls.type)
         assertTrue(cls.children.single().excluded)
     }
+
+    @Test
+    fun unknown_class_node_excludes_its_tests_by_uid_not_the_project() {
+        val tree = TestTreeModel.build(listOf(t(unit, null, null, "passed", uid = "u-1"), t(unit, null, null, "passed", uid = "u-2")),
+            emptyMap(), emptyList(), false)
+        val rules = tree.single().children.single().rules
+        assertEquals(listOf(ExclusionRuleDto(unit, uid = "u-1"), ExclusionRuleDto(unit, uid = "u-2")), rules)
+    }
+
+    @Test
+    fun nodes_excluded_by_an_ancestor_are_locked() {
+        val tree = TestTreeModel.build(tests, emptyMap(), listOf(ExclusionRuleDto(unit, "A.Calc")), false)
+        val calc = tree.single { it.path == unit }.children.single { it.type == "A.Calc" }
+        assertFalse(calc.locked, "excluded by its own rule: can be re-included")
+        assertTrue(calc.children.all { it.locked }, "children of an excluded class can't be toggled individually")
+        assertFalse(tree.single { it.path == unit }.children.single { it.type == "A.Other" }.locked)
+    }
 }

@@ -29,15 +29,21 @@ class ExclusionStore(val file: Path) {
         }
     }
 
-    fun save(rules: List<ExclusionRuleDto>) {
+    fun save(rules: List<ExclusionRuleDto>) = synchronized(lockFor(file)) {
         Files.createDirectories(file.parent)
-        val tmp = file.resolveSibling(file.fileName.toString() + ".tmp")
-        Files.writeString(tmp, gson.toJson(FileModel(1, rules)) + "\n")
-        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        val tmp = Files.createTempFile(file.parent, file.fileName.toString(), ".tmp")
+        try {
+            Files.writeString(tmp, gson.toJson(FileModel(1, rules)) + "\n")
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } finally {
+            Files.deleteIfExists(tmp)
+        }
     }
 
     companion object {
         private val LOG = logger<ExclusionStore>()
+        private val locks = java.util.concurrent.ConcurrentHashMap<Path, Any>()
+        private fun lockFor(file: Path): Any = locks.computeIfAbsent(file.toAbsolutePath().normalize()) { Any() }
 
         fun forSolution(solutionFile: Path): ExclusionStore {
             val name = solutionFile.fileName.toString().substringBeforeLast('.')

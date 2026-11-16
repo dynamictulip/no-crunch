@@ -9,7 +9,8 @@ data class Counts(val passed: Int = 0, val failed: Int = 0, val other: Int = 0) 
     operator fun plus(o: Counts) = Counts(passed + o.passed, failed + o.failed, other + o.other)
 }
 
-data class TestNode(val dto: TestResultDto, val excluded: Boolean) {
+/** [locked]: excluded by an ancestor's rule, so it can't be toggled on its own. */
+data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: Boolean = false) {
     val counts: Counts
         get() = when (dto.state) {
             "passed" -> Counts(passed = 1)
@@ -18,9 +19,12 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean) {
         }
 }
 
-data class ClassNode(val project: String, val type: String, val excluded: Boolean, val children: List<TestNode>) {
+data class ClassNode(val project: String, val type: String, val excluded: Boolean, val children: List<TestNode>, val locked: Boolean = false) {
     val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
-    val rule: ExclusionRuleDto get() = ExclusionRuleDto(project, type.takeIf { it != TestTreeModel.UNKNOWN_CLASS })
+
+    /** Rules that toggling this node adds or removes. Tests without a class are excluded one by one (by UID), never the whole project. */
+    val rules: List<ExclusionRuleDto>
+        get() = if (type == TestTreeModel.UNKNOWN_CLASS) children.map { TestTreeModel.ruleFor(it.dto) } else listOf(ExclusionRuleDto(project, type))
 }
 
 data class ProjectNode(
@@ -59,13 +63,15 @@ object TestTreeModel {
                 .groupBy { it.type ?: UNKNOWN_CLASS }
                 .toSortedMap()
                 .map { (type, members) ->
-                    val classExcluded = projectExcluded ||
+                    val ownClassRule = type != UNKNOWN_CLASS &&
                         rules.any { it.project == path && it.type == type && it.method == null && it.uid == null }
+                    val classExcluded = projectExcluded || ownClassRule ||
+                        (type == UNKNOWN_CLASS && members.isNotEmpty() && members.all { isExcluded(it, rules) })
                     val nodes = members
                         .sortedWith(compareBy({ it.method ?: it.displayName }, { it.displayName }))
-                        .map { TestNode(it, classExcluded || isExcluded(it, rules)) }
+                        .map { TestNode(it, projectExcluded || ownClassRule || isExcluded(it, rules), locked = projectExcluded || ownClassRule) }
                         .filter { !failuresOnly || it.dto.state == "failed" }
-                    ClassNode(path, type, classExcluded, nodes)
+                    ClassNode(path, type, classExcluded, nodes, locked = projectExcluded)
                 }
                 .filter { !failuresOnly || it.children.isNotEmpty() }
             val build = builds[path]

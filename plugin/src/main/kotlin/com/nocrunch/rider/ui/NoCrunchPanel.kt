@@ -16,6 +16,7 @@ import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.CheckboxTree
+import com.intellij.ui.CheckboxTreeBase
 import com.intellij.ui.CheckboxTreeListener
 import com.intellij.ui.CheckedTreeNode
 import com.intellij.ui.JBSplitter
@@ -43,7 +44,8 @@ import javax.swing.tree.TreePath
 class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleToolWindowPanel(true, true) {
     private val service = NoCrunchService.getInstance(project)
     private val root = CheckedTreeNode("root")
-    private val tree = CheckboxTree(Renderer(), root)
+    // No automatic parent/child propagation: each click maps to exactly one change in the exclusion rules.
+    private val tree = CheckboxTree(Renderer(), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
     private val details = DetailsPane(project, parent)
     private val status = JBLabel().apply { border = JBUI.Borders.empty(2, 6) }
     private var failuresOnly = false
@@ -56,13 +58,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         tree.addCheckboxTreeListener(object : CheckboxTreeListener {
             override fun nodeStateChanged(node: CheckedTreeNode) {
                 if (rebuilding) return
-                val rule = when (val o = node.userObject) {
-                    is ProjectNode -> o.rule
-                    is ClassNode -> o.rule
-                    is TestNode -> TestTreeModel.ruleFor(o.dto)
+                val rules = when (val o = node.userObject) {
+                    is ProjectNode -> listOf(o.rule)
+                    is ClassNode -> o.rules
+                    is TestNode -> listOf(TestTreeModel.ruleFor(o.dto))
                     else -> return
                 }
-                service.setExcluded(rule, excluded = !node.isChecked)
+                service.setExcluded(rules, excluded = !node.isChecked)
             }
         })
         tree.addTreeSelectionListener { showDetails(tree.lastSelectedPathComponent as? CheckedTreeNode) }
@@ -119,8 +121,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             for (p in model) {
                 val pn = CheckedTreeNode(p).apply { isChecked = !p.excluded }
                 for (c in p.children) {
-                    val cn = CheckedTreeNode(c).apply { isChecked = !c.excluded }
-                    for (t in c.children) cn.add(CheckedTreeNode(t).apply { isChecked = !t.excluded })
+                    val cn = CheckedTreeNode(c).apply { isChecked = !c.excluded; isEnabled = !c.locked }
+                    for (t in c.children) cn.add(CheckedTreeNode(t).apply { isChecked = !t.excluded; isEnabled = !t.locked })
                     pn.add(cn)
                 }
                 root.add(pn)

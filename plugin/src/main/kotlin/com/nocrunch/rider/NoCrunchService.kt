@@ -22,6 +22,7 @@ import com.nocrunch.rider.engine.TestResultDto
 import com.nocrunch.rider.engine.TestsDiscoveredDto
 import com.nocrunch.rider.exclusions.ExclusionStore
 import com.nocrunch.rider.files.MirrorFolderExcluder
+import com.nocrunch.rider.files.RepoPaths
 import com.nocrunch.rider.settings.NoCrunchSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +67,8 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     private var process: EngineProcess? = null
     private var exclusionStore: ExclusionStore? = null
     private val crashTimes = ArrayDeque<Long>()
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val saveDispatcher = Dispatchers.IO.limitedParallelism(1)
 
     private val pendingFiles = LinkedHashSet<String>()
     private var flushJob: Job? = null
@@ -107,9 +110,12 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
         }
     }
 
+    /** Stops and starts the engine off the UI thread (stopping waits for the engine to shut down). */
     fun restart() {
-        stopEngine()
-        start()
+        cs.launch(Dispatchers.IO) {
+            stopEngine()
+            start()
+        }
     }
 
     fun runAll() = send("runAll")
@@ -117,19 +123,20 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     fun pause() = send("pause")
     fun resume() = send("resume")
 
-    fun setExcluded(rule: ExclusionRuleDto, excluded: Boolean) {
+    fun setExcluded(changed: List<ExclusionRuleDto>, excluded: Boolean) {
         val updated = _exclusions.updateAndGetRules { rules ->
-            val without = rules.filterNot { it == rule }
-            if (excluded) without + rule else without
+            val without = rules.filterNot { it in changed }
+            if (excluded) without + changed else without
         }
-        cs.launch(Dispatchers.IO) { exclusionStore?.save(updated) }
+        // One writer, always saving the latest rules, so quick toggles can't land out of order.
+        cs.launch(saveDispatcher) { exclusionStore?.save(_exclusions.value) }
         send("setExclusions", mapOf("rules" to updated))
     }
 
     /** Called from the VFS listener; batched to at most one message per 100 ms. */
     fun filesChanged(paths: Collection<String>) {
         val root = repoRoot ?: return
-        val relevant = paths.filter { (it == root || it.startsWith("$root/")) && !it.contains("/.nocrunch/") && !it.endsWith("/.nocrunch") }
+        val relevant = RepoPaths.relevant(paths, root)
         if (relevant.isEmpty()) return
         synchronized(pendingFiles) {
             pendingFiles += relevant
@@ -207,7 +214,13 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
         return plugin.pluginPath.resolve("engine/NoCrunch.Engine.dll").takeIf { Files.exists(it) }
     }
 
-    override fun dispose() = stopEngine()
+    /** Project closing: shut the engine down in the background so closing never waits on it. */
+    override fun dispose() {
+        val p = process ?: return
+        process = null
+        client = null
+        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread { p.stop() }
+    }
 
     private inline fun MutableStateFlow<List<ExclusionRuleDto>>.updateAndGetRules(f: (List<ExclusionRuleDto>) -> List<ExclusionRuleDto>): List<ExclusionRuleDto> {
         while (true) {

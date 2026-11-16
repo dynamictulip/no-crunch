@@ -45,4 +45,22 @@ class ExclusionStoreTest {
         val store = ExclusionStore.forSolution(dir.resolve("My Shop.slnx"))
         assertEquals(dir.resolve("My Shop.nocrunch.user"), store.file)
     }
+
+    @Test
+    fun concurrent_saves_never_throw_and_leave_a_complete_file() {
+        val store = ExclusionStore(dir.resolve("S.nocrunch.user"))
+        val errors = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
+        val threads = (1..8).map { n ->
+            Thread {
+                repeat(25) { i ->
+                    try { store.save(List(n) { ExclusionRuleDto("p$it.csproj", "T$i") }) } catch (e: Throwable) { errors += e }
+                }
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+
+        assertTrue(errors.isEmpty(), errors.joinToString { it.toString() })
+        assertTrue(store.load().isNotEmpty())
+    }
 }
