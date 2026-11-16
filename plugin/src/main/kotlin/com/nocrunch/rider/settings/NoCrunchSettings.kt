@@ -15,6 +15,8 @@ class NoCrunchSettingsState : BaseState() {
     var maxParallel by property(0)
     /** Empty = find `dotnet` automatically. */
     var dotnetPath by string("")
+    /** Tool window: hide excluded projects, classes and tests. */
+    var hideExcluded by property(false)
 }
 
 @Service(Service.Level.PROJECT)

@@ -80,6 +80,7 @@ object TestTreeModel {
         rules: List<ExclusionRuleDto>,
         failuresOnly: Boolean,
         runs: Map<String, RunFinishedDto> = emptyMap(),
+        hideExcluded: Boolean = false,
     ): List<ProjectNode> {
         val byProject = tests.groupBy { it.project }
         val brokenBuilds = builds.values.filter { it.status in setOf("failed", "blocked") }.map { it.project }
@@ -100,12 +101,15 @@ object TestTreeModel {
                         .sortedWith(compareBy({ it.method ?: it.displayName }, { it.displayName }))
                         .map { TestNode(it, projectExcluded || ownClassRule || isExcluded(it, rules), locked = projectExcluded || ownClassRule) }
                         .filter { !failuresOnly || it.dto.state == "failed" }
+                        .filter { !hideExcluded || !it.excluded }
                     ClassNode(path, type, classExcluded, nodes, locked = projectExcluded)
                 }
                 .filter { !failuresOnly || it.children.isNotEmpty() }
+                .filter { !hideExcluded || (!it.excluded && it.children.isNotEmpty()) }
             val build = builds[path]
             val buildBroken = build?.status in setOf("failed", "blocked")
             if (failuresOnly && classes.isEmpty() && !buildBroken) return@mapNotNull null
+            if (hideExcluded && (projectExcluded || (classes.isEmpty() && byProject[path].orEmpty().isNotEmpty() && !buildBroken))) return@mapNotNull null
             ProjectNode(path, path.substringAfterLast('/').substringBeforeLast('.'), build?.status, build, runs[path], projectExcluded, classes)
         }.sortedBy { it.name }
     }
@@ -124,6 +128,10 @@ object TestTreeModel {
         "skipped" in outcomes -> "skipped"
         else -> null
     }
+
+    /** Keys of every known test that is currently excluded. */
+    fun excludedKeys(tests: Collection<TestResultDto>, rules: List<ExclusionRuleDto>): List<String> =
+        tests.filter { isExcluded(it, rules) }.map { it.key }
 
     /** Same matching as the engine's ExclusionSet. */
     fun isExcluded(t: TestResultDto, rules: List<ExclusionRuleDto>): Boolean = rules.any { r ->

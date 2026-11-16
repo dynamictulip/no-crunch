@@ -126,6 +126,13 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     }
 
     fun runAll() = send("runAll")
+
+    /** Runs everything: non-excluded tests as a normal run, excluded ones as a manual run. */
+    fun runAllIncludingExcluded() {
+        runAll()
+        val excluded = com.nocrunch.rider.ui.TestTreeModel.excludedKeys(_tests.value.values, _exclusions.value)
+        if (excluded.isNotEmpty()) runTests(excluded)
+    }
     fun runTests(keys: Collection<String>) = send("runTests", mapOf("keys" to keys.toList()))
     fun pause() = send("pause")
     fun resume() = send("resume")

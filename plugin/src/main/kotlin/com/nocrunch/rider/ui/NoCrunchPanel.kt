@@ -50,6 +50,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private val details = DetailsPane(project, parent)
     private val status = JBLabel().apply { border = JBUI.Borders.empty(2, 6) }
     private var failuresOnly = false
+    private val settings = com.nocrunch.rider.settings.NoCrunchSettings.getInstance(project)
     private var rebuilding = false
     private var lastModel: List<ProjectNode> = emptyList()
 
@@ -136,7 +137,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private fun render(s: Snapshot) {
         last = s
-        val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs)
+        val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs, settings.state.hideExcluded)
         status.text = statusText(s, model)
         tree.emptyText.text = StatusText.emptyTree(s.state)
         if (model == lastModel) return
@@ -254,12 +255,26 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         })
         add(simple("Run All Tests", AllIcons.RunConfigurations.TestState.Run_run) { service.runAll() })
+        add(simple("Run All Tests Including Excluded", AllIcons.Actions.RunAll) {
+            // Show results for excluded tests too, even if they were hidden.
+            if (settings.state.hideExcluded) { settings.state.hideExcluded = false; lastModel = emptyList(); last?.let(::render) }
+            service.runAllIncludingExcluded()
+        })
         add(runSelectedAction)
         add(object : ToggleAction("Show Failures Only", null, AllIcons.RunConfigurations.ShowIgnored) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun isSelected(e: AnActionEvent) = failuresOnly
             override fun setSelected(e: AnActionEvent, state: Boolean) {
                 failuresOnly = state
+                lastModel = emptyList()
+                last?.let(::render)
+            }
+        })
+        add(object : ToggleAction("Hide Excluded Tests", null, AllIcons.Actions.ToggleVisibility) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun isSelected(e: AnActionEvent) = settings.state.hideExcluded
+            override fun setSelected(e: AnActionEvent, state: Boolean) {
+                settings.state.hideExcluded = state
                 lastModel = emptyList()
                 last?.let(::render)
             }
