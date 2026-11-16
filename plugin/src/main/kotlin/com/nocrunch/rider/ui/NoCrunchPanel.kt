@@ -255,7 +255,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     }
                     r.append(o.name, if (o.excluded) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                     val c = o.counts
-                    r.append("   ✔ ${c.passed}  ✖ ${c.failed}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    r.append("   ✔ ${c.passed}  ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    r.append("✖ ${c.failed}", if (c.failed > 0 && !o.excluded) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     when {
                         o.excluded -> r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                         o.buildStatus == "failed" -> r.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
@@ -267,12 +268,20 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 }
                 is ClassNode -> {
                     r.icon = stateIcon(o.counts)
-                    r.append(o.type, if (o.excluded) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                    r.append(o.type, when {
+                        o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
+                        o.counts.failed > 0 -> FAILED
+                        else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
+                    })
                 }
                 is TestNode -> {
                     val d = o.dto
                     r.icon = if (o.excluded && d.state != "passed" && d.state != "failed") AllIcons.RunConfigurations.TestIgnored else testIcon(d.state)
-                    r.append(d.displayName, if (o.excluded) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                    r.append(d.displayName, when {
+                        o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
+                        d.state == "failed" -> FAILED
+                        else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
+                    })
                     d.durationMs?.takeIf { d.state == "passed" || d.state == "failed" }?.let {
                         r.append("  ${"%.0f".format(it)} ms", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
@@ -280,8 +289,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         }
 
+        private companion object {
+            val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, com.intellij.ui.JBColor.RED)
+            val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, com.intellij.ui.JBColor.RED)
+        }
+
         private fun stateIcon(c: Counts): Icon = when {
-            c.failed > 0 -> AllIcons.RunConfigurations.TestFailed
+            c.failed > 0 -> AllIcons.RunConfigurations.TestError
             c.other > 0 -> AllIcons.RunConfigurations.TestNotRan
             c.passed > 0 -> AllIcons.RunConfigurations.TestPassed
             else -> AllIcons.RunConfigurations.TestNotRan
@@ -289,7 +303,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
         private fun testIcon(state: String): Icon = when (state) {
             "passed" -> AllIcons.RunConfigurations.TestPassed
-            "failed" -> AllIcons.RunConfigurations.TestFailed
+            "failed" -> AllIcons.RunConfigurations.TestError
             "skipped" -> AllIcons.RunConfigurations.TestSkipped
             "excluded" -> AllIcons.RunConfigurations.TestIgnored
             "running" -> AllIcons.Process.Step_1
