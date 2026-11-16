@@ -33,9 +33,12 @@ public sealed class EngineCore(
     private ProjectGraph? _graph;
     private bool _paused;
     private Task? _loop;
+    private TimeSpan? _nextRetry;
 
     public TimeSpan Debounce { get; set; } = TimeSpan.FromMilliseconds(300);
     public int MaxParallelTestProjects { get; set; } = Math.Max(1, Environment.ProcessorCount / 2);
+    /// <summary>First delay before retrying a cycle that failed (e.g. restore could not reach a feed); doubles up to 5 minutes.</summary>
+    public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(15);
 
     private string MirrorSolutionPath => map.ToMirror(solutionPath);
 
@@ -171,12 +174,14 @@ public sealed class EngineCore(
         var dirty = new HashSet<string>(snap.Projects, StringComparer.Ordinal);
         var needGraph = snap.NeedGraph;
         var restore = snap.Restore;
-        var synced = new HashSet<string>(StringComparer.Ordinal);
+        // Every change copied into the mirror is recorded here as it happens. If this cycle is cancelled or fails,
+        // these are handed to the next cycle: the mirror already has them, so a re-sync would not report them again.
+        var synced = new HashSet<string>(snap.SyncedRel, StringComparer.Ordinal);
         try
         {
             await events.StateChanged(EngineState.Syncing, 0);
-            if (snap.Reconcile) synced.UnionWith(await workspace.ReconcileAsync(ct));
-            else if (snap.Files.Count > 0) synced.UnionWith(await workspace.SyncAsync(snap.Files.ToList(), ct));
+            if (snap.Reconcile) synced.UnionWith(await workspace.ReconcileAsync(ct, synced));
+            else if (snap.Files.Count > 0) synced.UnionWith(await workspace.SyncAsync(snap.Files.ToList(), ct, synced));
             if (snap.Initialize) await workspace.InitializeAsync(ct);
 
             if (_graph is null || synced.Any(ProjectGraph.IsGraphFile)) needGraph = true;
@@ -220,7 +225,7 @@ public sealed class EngineCore(
             HashSet<string> previouslyFailing;
             lock (_lock)
                 previouslyFailing = _results.Values.Where(r => r.State == TestState.Failed).Select(r => r.Id.Project).ToHashSet(StringComparer.Ordinal);
-            await MarkStaleAsync(graph, dirty);
+            await MarkStaleAsync(graph, dirty.Where(p => !manualOnly.Contains(p)).ToHashSet(StringComparer.Ordinal));
             await events.StateChanged(EngineState.Building, dirty.Count);
             var outcomes = await build.BuildAsync(graph.InBuildOrder(dirty),
                 p => events.ProjectBuildStarted(p.RepoRelativePath),
@@ -256,29 +261,43 @@ public sealed class EngineCore(
             }
             ct.ThrowIfCancellationRequested();
 
-            lock (_lock) store.Save(_results.Values.ToList());
+            List<TestResultUpdate> toSave;
+            lock (_lock) toSave = _results.Values.ToList();
+            store.Save(toSave);
+            _nextRetry = null;
             await events.StateChanged(EngineState.Idle, 0);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            lock (_lock)
-            {
-                _pending.Projects.UnionWith(dirty);
-                _pending.ManualKeys.UnionWith(snap.ManualKeys);
-                _pending.NeedGraph |= needGraph;
-                _pending.Restore |= restore;
-                _pending.All |= snap.All;
-                _pending.UnknownTestProjects |= snap.UnknownTestProjects;
-                // Files already synced into the mirror are represented by `dirty`; unsynced ones must be retried.
-                if (synced.Count == 0 && !snap.Reconcile) _pending.Files.UnionWith(snap.Files);
-                if (synced.Count == 0) _pending.Reconcile |= snap.Reconcile;
-                _pending.Initialize |= snap.Initialize && synced.Count == 0;
-            }
+            Requeue(snap, dirty, synced, needGraph, restore);
         }
         catch (Exception ex)
         {
-            await events.Log("error", "Cycle failed: " + map.RewriteText(ex.ToString()));
+            Requeue(snap, dirty, synced, needGraph, restore);
+            var delay = _nextRetry ?? RetryDelay;
+            _nextRetry = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, TimeSpan.FromMinutes(5).Ticks));
+            await events.Log("error", $"Cycle failed; retrying in {delay.TotalSeconds:0.#}s: " + map.RewriteText(ex.ToString()));
             await events.StateChanged(EngineState.Idle, 0);
+            _ = Task.Delay(delay, _stop.Token).ContinueWith(t => { if (!t.IsCanceled) Signal(); }, TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>Hands everything an interrupted or failed cycle had not finished to the next cycle.</summary>
+    private void Requeue(Pending snap, IEnumerable<string> dirty, IEnumerable<string> synced, bool needGraph, bool restore)
+    {
+        lock (_lock)
+        {
+            _pending.Projects.UnionWith(dirty);
+            _pending.SyncedRel.UnionWith(synced);
+            _pending.ManualKeys.UnionWith(snap.ManualKeys);
+            _pending.NeedGraph |= needGraph;
+            _pending.Restore |= restore;
+            _pending.All |= snap.All;
+            _pending.UnknownTestProjects |= snap.UnknownTestProjects;
+            _pending.Initialize |= snap.Initialize;
+            // Re-syncing is safe: files already copied report no change, and are carried in SyncedRel instead.
+            if (snap.Reconcile) _pending.Reconcile = true;
+            else _pending.Files.UnionWith(snap.Files);
         }
     }
 
@@ -340,6 +359,8 @@ public sealed class EngineCore(
     private sealed class Pending
     {
         public HashSet<string> Files { get; } = new(StringComparer.Ordinal);
+        /// <summary>Repo-relative paths already copied into the mirror whose projects still need building.</summary>
+        public HashSet<string> SyncedRel { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Projects { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ManualKeys { get; } = new(StringComparer.Ordinal);
         public bool Reconcile { get; set; }
@@ -349,7 +370,7 @@ public sealed class EngineCore(
         public bool All { get; set; }
         public bool UnknownTestProjects { get; set; }
 
-        public bool IsEmpty => Files.Count == 0 && Projects.Count == 0 && ManualKeys.Count == 0
+        public bool IsEmpty => Files.Count == 0 && SyncedRel.Count == 0 && Projects.Count == 0 && ManualKeys.Count == 0
                                && !Reconcile && !Initialize && !NeedGraph && !Restore && !All && !UnknownTestProjects;
     }
 }

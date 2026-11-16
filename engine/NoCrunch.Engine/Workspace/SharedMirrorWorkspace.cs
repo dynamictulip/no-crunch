@@ -20,9 +20,9 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
         await ReconcileAsync(ct);
     }
 
-    public Task<IReadOnlyCollection<string>> SyncAsync(IReadOnlyCollection<string> changedRepoPaths, CancellationToken ct)
+    public Task<IReadOnlyCollection<string>> SyncAsync(IReadOnlyCollection<string> changedRepoPaths, CancellationToken ct, ISet<string>? progress = null)
     {
-        var changed = new SortedSet<string>(StringComparer.Ordinal);
+        var changed = new ProgressSet(progress);
         foreach (var repoPath in changedRepoPaths)
         {
             ct.ThrowIfCancellationRequested();
@@ -38,23 +38,28 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
             else if (Directory.Exists(dst)) DeleteMirrorDir(dst, changed);
             else if (File.Exists(dst)) { File.Delete(dst); changed.Add(rel); }
         }
-        return Task.FromResult<IReadOnlyCollection<string>>(changed);
+        return Task.FromResult<IReadOnlyCollection<string>>(changed.Items);
     }
 
-    public Task<IReadOnlyCollection<string>> ReconcileAsync(CancellationToken ct)
+    public Task<IReadOnlyCollection<string>> ReconcileAsync(CancellationToken ct, ISet<string>? progress = null)
     {
-        var changed = new SortedSet<string>(StringComparer.Ordinal);
+        var changed = new ProgressSet(progress);
         ReconcileDir(layout.RepoRoot, layout.MirrorRoot, changed, ct);
-        return Task.FromResult<IReadOnlyCollection<string>>(changed);
+        return Task.FromResult<IReadOnlyCollection<string>>(changed.Items);
     }
 
     public string MirrorPathOf(string repoRelativePath) => map.MirrorPath(repoRelativePath);
 
-    private void ReconcileDir(string srcDir, string dstDir, ISet<string> changed, CancellationToken ct)
+    /// <summary>macOS (APFS default) and Windows file systems are case-insensitive; a case-only rename is the same entry.</summary>
+    private static readonly StringComparer NameComparer =
+        OperatingSystem.IsMacOS() || OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private void ReconcileDir(string srcDir, string dstDir, ProgressSet changed, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         Directory.CreateDirectory(dstDir);
-        var srcFiles = new HashSet<string>(StringComparer.Ordinal);
+        MatchCasing(srcDir, dstDir);
+        var srcFiles = new HashSet<string>(NameComparer);
         foreach (var file in Directory.EnumerateFiles(srcDir))
         {
             var name = Path.GetFileName(file);
@@ -62,7 +67,7 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
             srcFiles.Add(name);
             if (CopyIfDifferent(file, Path.Combine(dstDir, name))) changed.Add(map.RepoRelative(file));
         }
-        var srcDirs = new HashSet<string>(StringComparer.Ordinal);
+        var srcDirs = new HashSet<string>(NameComparer);
         foreach (var dir in Directory.EnumerateDirectories(srcDir))
         {
             var name = Path.GetFileName(dir);
@@ -85,7 +90,23 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
         }
     }
 
-    private void DeleteMirrorDir(string mirrorDir, ISet<string> changed)
+    /// <summary>Renames mirror entries whose names differ from the repo only by case, so the mirror keeps the repo's casing.</summary>
+    private static void MatchCasing(string srcDir, string dstDir)
+    {
+        if (NameComparer == StringComparer.Ordinal) return;
+        var dstNames = Directory.EnumerateFileSystemEntries(dstDir).Select(Path.GetFileName).OfType<string>()
+            .ToDictionary(n => n, n => n, StringComparer.OrdinalIgnoreCase);
+        foreach (var name in Directory.EnumerateFileSystemEntries(srcDir).Select(Path.GetFileName).OfType<string>())
+        {
+            if (!dstNames.TryGetValue(name, out var existing) || existing == name) continue;
+            var from = Path.Combine(dstDir, existing);
+            var temp = Path.Combine(dstDir, existing + ".nocrunch-rename");
+            if (Directory.Exists(from)) { Directory.Move(from, temp); Directory.Move(temp, Path.Combine(dstDir, name)); }
+            else { File.Move(from, temp); File.Move(temp, Path.Combine(dstDir, name)); }
+        }
+    }
+
+    private void DeleteMirrorDir(string mirrorDir, ProgressSet changed)
     {
         foreach (var file in Directory.EnumerateFiles(mirrorDir, "*", SearchOption.AllDirectories))
         {
@@ -140,5 +161,17 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
         if (lines.Any(l => l.Trim() is ".nocrunch/" or ".nocrunch" or "/.nocrunch/")) return;
         var prefix = lines.Length > 0 && !string.IsNullOrEmpty(lines[^1]) ? "\n" : "";
         await File.AppendAllTextAsync(exclude, prefix + ".nocrunch/\n", ct);
+    }
+
+    /// <summary>Collects changes and mirrors each one into the caller's progress sink immediately.</summary>
+    private sealed class ProgressSet(ISet<string>? progress) : HashSet<string>(StringComparer.Ordinal)
+    {
+        public IReadOnlyCollection<string> Items => this.Order(StringComparer.Ordinal).ToList();
+
+        public new bool Add(string item)
+        {
+            progress?.Add(item);
+            return base.Add(item);
+        }
     }
 }

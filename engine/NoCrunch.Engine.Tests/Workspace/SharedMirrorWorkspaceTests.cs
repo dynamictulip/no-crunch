@@ -127,6 +127,21 @@ public class SharedMirrorWorkspaceTests
     }
 
     [TestMethod]
+    public async Task Reconcile_case_only_rename_keeps_file_and_dir()
+    {
+        var (root, layout, ws) = Setup();
+        await ws.InitializeAsync(CancellationToken.None);
+        File.Move(Path.Combine(root, "src/App/Program.cs"), Path.Combine(root, "src/App/program.cs"));
+        Directory.Move(Path.Combine(root, "src/App"), Path.Combine(root, "src/tmp-rename"));
+        Directory.Move(Path.Combine(root, "src/tmp-rename"), Path.Combine(root, "src/app"));
+
+        await ws.ReconcileAsync(CancellationToken.None);
+
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/app/program.cs")), "file must survive a case-only rename");
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/app/App.csproj")), "dir must survive a case-only rename");
+    }
+
+    [TestMethod]
     public async Task Reconcile_after_branch_switch_matches_repo()
     {
         var (root, layout, ws) = Setup();

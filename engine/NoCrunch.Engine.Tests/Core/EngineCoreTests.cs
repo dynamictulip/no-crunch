@@ -24,16 +24,28 @@ public class EngineCoreTests
         public ConcurrentQueue<string> Calls { get; } = new();
         public Func<IReadOnlyCollection<string>, IReadOnlyCollection<string>> OnSync { get; set; } = paths => paths.ToList();
         public IReadOnlyCollection<string> ReconcileResult { get; set; } = [];
+        /// <summary>Runs after changes are applied (and reported to the progress sink) but before Sync returns.</summary>
+        public Func<CancellationToken, Task> SyncGate { get; set; } = _ => Task.CompletedTask;
+        private readonly HashSet<string> _alreadyInMirror = [];
 
         public Task InitializeAsync(CancellationToken ct) { Calls.Enqueue("init"); return Task.CompletedTask; }
 
-        public Task<IReadOnlyCollection<string>> SyncAsync(IReadOnlyCollection<string> paths, CancellationToken ct)
+        public async Task<IReadOnlyCollection<string>> SyncAsync(IReadOnlyCollection<string> paths, CancellationToken ct, ISet<string>? progress = null)
         {
             Calls.Enqueue("sync:" + string.Join(",", paths.Order()));
-            return Task.FromResult(OnSync(paths));
+            // Like the real mirror: a file already copied with the same content is not reported again.
+            var changed = OnSync(paths).Where(p => { lock (_alreadyInMirror) return _alreadyInMirror.Add(p); }).ToList();
+            foreach (var c in changed) progress?.Add(c);
+            await SyncGate(ct);
+            return changed;
         }
 
-        public Task<IReadOnlyCollection<string>> ReconcileAsync(CancellationToken ct) { Calls.Enqueue("reconcile"); return Task.FromResult(ReconcileResult); }
+        public Task<IReadOnlyCollection<string>> ReconcileAsync(CancellationToken ct, ISet<string>? progress = null)
+        {
+            Calls.Enqueue("reconcile");
+            foreach (var c in ReconcileResult) progress?.Add(c);
+            return Task.FromResult(ReconcileResult);
+        }
 
         public string MirrorPathOf(string repoRelativePath) => "/m/" + repoRelativePath;
     }
@@ -42,10 +54,16 @@ public class EngineCoreTests
     {
         public ConcurrentQueue<string[]> Builds { get; } = new();
         public int Restores;
+        public int RestoreFailuresRemaining;
         public Func<CancellationToken, Task> Gate { get; set; } = _ => Task.CompletedTask;
         public HashSet<string> Failing { get; } = [];
 
-        public Task RestoreAsync(string mirrorSolutionPath, CancellationToken ct) { Interlocked.Increment(ref Restores); return Task.CompletedTask; }
+        public Task RestoreAsync(string mirrorSolutionPath, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Restores);
+            if (Interlocked.Decrement(ref RestoreFailuresRemaining) >= 0) throw new InvalidOperationException("Restore failed: feed unreachable");
+            return Task.CompletedTask;
+        }
 
         public async Task<IReadOnlyDictionary<string, BuildOutcome>> BuildAsync(IReadOnlyList<ProjectInfo> inOrder,
             Func<ProjectInfo, Task>? onStarted, Func<BuildOutcome, Task>? onFinished, CancellationToken ct)
@@ -127,7 +145,12 @@ public class EngineCoreTests
 
     private static TestResultUpdate U(TestId id, TestState s) => new(id, id.Method ?? id.Uid, s, null, null, null, null, null);
 
-    private sealed record Harness(EngineCore Core, FakeWorkspace Ws, FakeBuild Build, FakeTests Tests, Recorder Events, string Root, ResultStore Store);
+    private sealed record Harness(EngineCore Core, FakeWorkspace Ws, FakeBuild Build, FakeTests Tests, Recorder Events, string Root, ResultStore Store, GraphGate Graph);
+
+    private sealed class GraphGate
+    {
+        public Func<CancellationToken, Task> Gate { get; set; } = _ => Task.CompletedTask;
+    }
 
     private static async Task<Harness> CreateAsync(Action<FakeBuild>? configureBuild = null, ResultStore? store = null, bool start = true)
     {
@@ -145,13 +168,15 @@ public class EngineCoreTests
         var tests = new FakeTests();
         var events = new Recorder();
         store ??= new ResultStore(Path.Combine(layout.StateDir, "results.json"));
-        var core = new EngineCore(ws, ct => ProjectGraph.LoadAsync(layout, query, ct), build, tests, store, events,
+        var gate = new GraphGate();
+        var core = new EngineCore(ws, async ct => { await gate.Gate(ct); return await ProjectGraph.LoadAsync(layout, query, ct); }, build, tests, store, events,
             new PathMap(layout.RepoRoot, layout.MirrorRoot), layout.SolutionPath)
         {
             Debounce = TimeSpan.FromMilliseconds(80),
             MaxParallelTestProjects = 2,
+            RetryDelay = TimeSpan.FromMilliseconds(200),
         };
-        var h = new Harness(core, ws, build, tests, events, root, store);
+        var h = new Harness(core, ws, build, tests, events, root, store, gate);
         if (start)
         {
             await core.StartAsync(CancellationToken.None);
@@ -335,6 +360,78 @@ public class EngineCoreTests
         await h.Events.WaitIdleAsync();
 
         CollectionAssert.Contains(h.Build.Builds.Single(), Core, "previously failed project is rebuilt");
+    }
+
+    [TestMethod]
+    public async Task Cancel_during_graph_load_keeps_synced_changes()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        var graphStarted = new TaskCompletionSource();
+        var calls = 0;
+        h.Graph.Gate = async ct =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return;
+            graphStarted.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        };
+
+        h.Core.FilesChanged([Abs(h, "src/Core/Core.csproj")]);
+        await graphStarted.Task.WaitAsync(Wait);
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        CollectionAssert.AreEquivalent(new[] { Core, CoreTests, Other }, h.Build.Builds.Single());
+    }
+
+    [TestMethod]
+    public async Task Cancel_during_sync_keeps_files_already_copied()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        var syncStarted = new TaskCompletionSource();
+        var calls = 0;
+        h.Ws.SyncGate = async ct =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return;
+            syncStarted.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        };
+
+        h.Core.FilesChanged([Abs(h, "src/Core/Calc.cs")]);
+        await syncStarted.Task.WaitAsync(Wait);
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        CollectionAssert.AreEquivalent(new[] { Core, CoreTests, Other }, h.Build.Builds.Single());
+    }
+
+    [TestMethod]
+    public async Task Failed_restore_keeps_changes_and_is_retried()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        h.Build.RestoreFailuresRemaining = 1;
+
+        h.Core.FilesChanged([Abs(h, "src/Core/Core.csproj")]);
+        var deadline = DateTime.UtcNow + Wait;
+        while (h.Build.Builds.IsEmpty && DateTime.UtcNow < deadline) await Task.Delay(50);
+
+        Assert.IsTrue(h.Build.Restores >= 3, $"restore retried (startup + failed + retry), was {h.Build.Restores}");
+        CollectionAssert.AreEquivalent(new[] { Core, CoreTests }, h.Build.Builds.Single());
+    }
+
+    [TestMethod]
+    public async Task Manual_run_keeps_other_results_in_the_project()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+
+        h.Core.RunTests([$"{CoreTests}|T|A"]);
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsFalse(h.Events.Results.Any(r => r.Id.Method == "B" && r.State == TestState.Stale), "untouched test must not go stale");
+        Assert.AreEqual(TestState.Passed, h.Store.Load()[$"{CoreTests}|T|B"].State);
     }
 
     [TestMethod]
