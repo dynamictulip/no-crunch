@@ -56,7 +56,8 @@ val publishEngine by tasks.registering(Exec::class) {
     commandLine("dotnet", "publish", engineProject.absolutePath, "-c", "Release", "-o", engineOut.get().asFile.absolutePath, "-nologo", "-v:q")
 }
 
-tasks.named<org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask>("prepareSandbox") {
+// Every sandbox (buildPlugin, runIde, tests) gets the engine; runIde uses its own prepareSandbox_runIde task.
+tasks.withType<org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask>().configureEach {
     dependsOn(publishEngine)
     from(engineOut) {
         into(pluginName.map { "$it/engine" })

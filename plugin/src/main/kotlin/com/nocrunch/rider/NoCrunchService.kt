@@ -80,7 +80,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
             return
         }
         val engineDll = findEngineDll() ?: run {
-            _state.value = EngineUiState("error", error = "Engine not found in the plugin installation.")
+            _state.value = EngineUiState("error", error = "Engine not found at ${engineDllPath() ?: "(plugin path unknown)"}")
             return
         }
         MirrorFolderExcluder.ensureIgnored()
@@ -209,10 +209,10 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
         return candidates.firstOrNull { it.fileName.toString().substringBeforeLast('.') == project.name } ?: candidates.firstOrNull()
     }
 
-    private fun findEngineDll(): Path? {
-        val plugin = PluginManagerCore.getPlugin(PluginId.getId("com.nocrunch.rider")) ?: return null
-        return plugin.pluginPath.resolve("engine/NoCrunch.Engine.dll").takeIf { Files.exists(it) }
-    }
+    private fun engineDllPath(): Path? =
+        PluginManagerCore.getPlugin(PluginId.getId("com.nocrunch.rider"))?.pluginPath?.resolve("engine/NoCrunch.Engine.dll")
+
+    private fun findEngineDll(): Path? = engineDllPath()?.takeIf { Files.exists(it) }
 
     /** Project closing: shut the engine down in the background so closing never waits on it. */
     override fun dispose() {
