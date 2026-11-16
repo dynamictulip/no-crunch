@@ -49,7 +49,8 @@ private class NoCrunchStatusWidget(private val project: Project) : StatusBarWidg
                     s.state == "testing" -> "No Crunch: testing…"
                     brokenBuilds > 0 -> "No Crunch: ✖ build"
                     failed > 0 -> "No Crunch: ✖ $failed"
-                    s.state == "starting" || s.state == "stopped" -> "No Crunch"
+                    s.state == "starting" -> "No Crunch: starting…"
+                    s.state == "stopped" -> "No Crunch"
                     else -> "No Crunch: ✔"
                 }
                 statusBar.updateWidget(WIDGET_ID)

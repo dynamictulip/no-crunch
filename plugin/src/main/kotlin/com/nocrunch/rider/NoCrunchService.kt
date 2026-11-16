@@ -38,14 +38,19 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /** state: starting, idle, syncing, building, testing, paused, stopped, error */
-data class EngineUiState(val state: String, val queued: Int = 0, val error: String? = null)
+data class EngineUiState(val state: String, val queued: Int = 0, val error: String? = null) {
+    companion object {
+        /** The service is created when the project opens or the tool window shows; the engine starts straight away. */
+        fun initial() = EngineUiState("starting")
+    }
+}
 
 /** Owns the engine process for one open solution and holds the latest results for the UI. */
 @Service(Service.Level.PROJECT)
 class NoCrunchService(private val project: Project, private val cs: CoroutineScope) : Disposable {
     private val log = logger<NoCrunchService>()
 
-    private val _state = MutableStateFlow(EngineUiState("stopped"))
+    private val _state = MutableStateFlow(EngineUiState.initial())
     private val _tests = MutableStateFlow<Map<String, TestResultDto>>(emptyMap())
     private val _builds = MutableStateFlow<Map<String, BuildFinishedDto>>(emptyMap())
     private val _runs = MutableStateFlow<Map<String, RunFinishedDto>>(emptyMap())
@@ -73,8 +78,10 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     private val pendingFiles = LinkedHashSet<String>()
     private var flushJob: Job? = null
 
+    /** Idempotent: safe to call from startup and whenever the tool window opens. */
+    @Synchronized
     fun start() {
-        if (client != null) return
+        if (process != null) return
         val solution = findSolution() ?: run {
             _state.value = EngineUiState("error", error = "No .sln or .slnx found for this project.")
             return
@@ -179,6 +186,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
 
     private fun onEngineExit(code: Int) {
         client = null
+        process = null
         val now = System.currentTimeMillis()
         val recent = synchronized(crashTimes) {
             crashTimes.addLast(now)

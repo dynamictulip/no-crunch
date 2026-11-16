@@ -86,6 +86,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         toolbar = ActionManager.getInstance().createActionToolbar("NoCrunch", toolbarActions(), true)
             .apply { targetComponent = this@NoCrunchPanel }.component
 
+        tree.emptyText.text = StatusText.emptyTree(service.state.value)
+        status.text = StatusText.describe(service.state.value)
+        // Covers plugin reloads and any case where the startup activity didn't run.
+        service.start()
         val job = service.scope.launch(Dispatchers.EDT) { collect() }
         Disposer.register(parent) { job.cancel() }
     }
@@ -111,6 +115,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         last = s
         val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs)
         status.text = statusText(s, model)
+        tree.emptyText.text = StatusText.emptyTree(s.state)
         if (model == lastModel) return
         lastModel = model
         val expanded = TreeUtil.collectExpandedPaths(tree).map { pathKey(it) }.toSet()
@@ -141,8 +146,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private fun statusText(s: Snapshot, model: List<ProjectNode>): String {
         val counts = model.fold(Counts()) { acc, p -> acc + p.counts }
-        val state = s.state.error?.let { "Error: $it" } ?: s.state.state.replaceFirstChar { it.uppercase() }
-        return "$state   ✔ ${counts.passed}   ✖ ${counts.failed}"
+        return "${StatusText.describe(s.state)}   ✔ ${counts.passed}   ✖ ${counts.failed}"
     }
 
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
