@@ -5,18 +5,27 @@ import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.RunFinishedDto
 import com.nocrunch.rider.engine.TestResultDto
 
-data class Counts(val passed: Int = 0, val failed: Int = 0, val other: Int = 0) {
-    operator fun plus(o: Counts) = Counts(passed + o.passed, failed + o.failed, other + o.other)
+/** Pending = queued, running, stale or just discovered. Excluded and skipped tests aren't counted. */
+data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0) {
+    operator fun plus(o: Counts) = Counts(passed + o.passed, failed + o.failed, pending + o.pending)
+
+    fun label() = "✔ $passed  ✖ $failed  ○ $pending"
 }
 
 /** [locked]: excluded by an ancestor's rule, so it can't be toggled on its own. */
 data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: Boolean = false) {
     val counts: Counts
-        get() = when (dto.state) {
-            "passed" -> Counts(passed = 1)
-            "failed" -> Counts(failed = 1)
-            else -> Counts(other = 1)
+        get() = when {
+            excluded -> Counts()
+            dto.state == "passed" -> Counts(passed = 1)
+            dto.state == "failed" -> Counts(failed = 1)
+            dto.state in PENDING_STATES -> Counts(pending = 1)
+            else -> Counts()
         }
+
+    private companion object {
+        val PENDING_STATES = setOf("queued", "running", "stale", "discovered")
+    }
 }
 
 data class ClassNode(val project: String, val type: String, val excluded: Boolean, val children: List<TestNode>, val locked: Boolean = false) {

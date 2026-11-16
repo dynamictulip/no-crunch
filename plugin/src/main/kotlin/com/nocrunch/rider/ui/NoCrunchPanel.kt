@@ -146,7 +146,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private fun statusText(s: Snapshot, model: List<ProjectNode>): String {
         val counts = model.fold(Counts()) { acc, p -> acc + p.counts }
-        return "${StatusText.describe(s.state)}   ✔ ${counts.passed}   ✖ ${counts.failed}"
+        return "${StatusText.describe(s.state)}   ${counts.label()}"
     }
 
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
@@ -258,9 +258,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         else -> stateIcon(o.counts)
                     }
                     r.append(o.name, if (o.excluded) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                    val c = o.counts
-                    r.append("   ✔ ${c.passed}  ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                    r.append("✖ ${c.failed}", if (c.failed > 0 && !o.excluded) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    appendCounts(o.counts, o.excluded)
                     when {
                         o.excluded -> r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                         o.buildStatus == "failed" -> r.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
@@ -277,6 +275,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         o.counts.failed > 0 -> FAILED
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
+                    appendCounts(o.counts, o.excluded)
                 }
                 is TestNode -> {
                     val d = o.dto
@@ -298,9 +297,16 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, com.intellij.ui.JBColor.RED)
         }
 
+        private fun appendCounts(c: Counts, excluded: Boolean) {
+            val r = textRenderer
+            r.append("   ✔ ${c.passed}  ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            r.append("✖ ${c.failed}", if (c.failed > 0 && !excluded) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            r.append("  ○ ${c.pending}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+        }
+
         private fun stateIcon(c: Counts): Icon = when {
             c.failed > 0 -> AllIcons.RunConfigurations.TestError
-            c.other > 0 -> AllIcons.RunConfigurations.TestNotRan
+            c.pending > 0 -> AllIcons.RunConfigurations.TestNotRan
             c.passed > 0 -> AllIcons.RunConfigurations.TestPassed
             else -> AllIcons.RunConfigurations.TestNotRan
         }

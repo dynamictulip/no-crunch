@@ -62,8 +62,8 @@ class TestTreeModelTest {
     fun counts_roll_up() {
         val tree = TestTreeModel.build(tests, emptyMap(), emptyList(), false)
         val unitNode = tree.single { it.path == unit }
-        assertEquals(Counts(passed = 2, failed = 1, other = 0), unitNode.counts)
-        assertEquals(Counts(passed = 1, failed = 1, other = 0), unitNode.children.single { it.type == "A.Calc" }.counts)
+        assertEquals(Counts(passed = 2, failed = 1, pending = 0), unitNode.counts)
+        assertEquals(Counts(passed = 1, failed = 1, pending = 0), unitNode.children.single { it.type == "A.Calc" }.counts)
     }
 
     @Test
@@ -112,5 +112,23 @@ class TestTreeModelTest {
         assertFalse(calc.locked, "excluded by its own rule: can be re-included")
         assertTrue(calc.children.all { it.locked }, "children of an excluded class can't be toggled individually")
         assertFalse(tree.single { it.path == unit }.children.single { it.type == "A.Other" }.locked)
+    }
+
+    @Test
+    fun pending_counts_queued_running_stale_and_discovered_but_not_excluded_or_skipped() {
+        val mixed = listOf(
+            t(unit, "A.C", "Q", "queued"), t(unit, "A.C", "R", "running"), t(unit, "A.C", "S", "stale"),
+            t(unit, "A.C", "D", "discovered"), t(unit, "A.C", "K", "skipped"), t(unit, "A.C", "X", "excluded"),
+            t(unit, "A.C", "P", "passed"),
+        )
+        val tree = TestTreeModel.build(mixed, emptyMap(), listOf(ExclusionRuleDto(unit, "A.C", "P")), false)
+
+        assertEquals(Counts(passed = 0, failed = 0, pending = 4), tree.single().children.single().counts)
+        assertEquals(Counts(passed = 0, failed = 0, pending = 4), tree.single().counts)
+    }
+
+    @Test
+    fun counts_label_shows_all_three() {
+        assertEquals("✔ 2  ✖ 1  ○ 3", Counts(passed = 2, failed = 1, pending = 3).label())
     }
 }
