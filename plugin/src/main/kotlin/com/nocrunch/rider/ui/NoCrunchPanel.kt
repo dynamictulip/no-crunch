@@ -48,7 +48,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     // No automatic parent/child propagation: each click maps to exactly one change in the exclusion rules.
     private val tree = CheckboxTree(Renderer(), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
     private val details = DetailsPane(project, parent)
-    private val status = JBLabel().apply { border = JBUI.Borders.empty(2, 6) }
+    private val bar = ProgressBar()
     private var failuresOnly = false
     private val settings = com.nocrunch.rider.settings.NoCrunchSettings.getInstance(project)
     private var rebuilding = false
@@ -97,20 +97,20 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         })
 
-        val top = JPanel(BorderLayout()).apply {
-            add(JBScrollPane(tree), BorderLayout.CENTER)
-            add(status, BorderLayout.SOUTH)
-        }
         val splitter = JBSplitter(false, 0.55f).apply {
-            firstComponent = top
+            firstComponent = JBScrollPane(tree)
             secondComponent = details.component
         }
-        setContent(splitter)
+        // NCrunch-style status bar across the top, above the tree and details.
+        setContent(JPanel(BorderLayout()).apply {
+            add(bar, BorderLayout.NORTH)
+            add(splitter, BorderLayout.CENTER)
+        })
         toolbar = ActionManager.getInstance().createActionToolbar("NoCrunch", toolbarActions(), true)
             .apply { targetComponent = this@NoCrunchPanel }.component
 
         tree.emptyText.text = StatusText.emptyTree(service.state.value)
-        status.text = StatusText.describe(service.state.value)
+        bar.update(ProgressBarModel.from(Counts(), service.state.value, 0))
         // Covers plugin reloads and any case where the startup activity didn't run.
         service.start()
         PopupHandler.installPopupMenu(tree, DefaultActionGroup(runSelectedAction), "NoCrunchTreePopup")
@@ -138,7 +138,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private fun render(s: Snapshot) {
         last = s
         val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs, settings.state.hideExcluded)
-        status.text = statusText(s, model)
+        bar.update(barState(s))
         tree.emptyText.text = StatusText.emptyTree(s.state)
         if (model == lastModel) return
         lastModel = model
@@ -168,9 +168,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         }
     }
 
-    private fun statusText(s: Snapshot, model: List<ProjectNode>): String {
-        val counts = model.fold(Counts()) { acc, p -> acc + p.counts }
-        return "${StatusText.describe(s.state)}   ${counts.label()}"
+    /** Based on every test, regardless of the "failures only" / "hide excluded" view filters. */
+    private fun barState(s: Snapshot): BarState {
+        val counts = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly = false, runs = s.runs)
+            .fold(Counts()) { acc, p -> acc + p.counts }
+        return ProgressBarModel.from(counts, s.state, s.builds.values.count { it.status == "failed" })
     }
 
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
