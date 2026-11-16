@@ -110,8 +110,11 @@ public sealed class EngineCore(
         Signal();
     }
 
+    private int _disposed;
+
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) == 1) return;
         await _stop.CancelAsync();
         if (_loop is not null)
         {

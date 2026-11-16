@@ -435,6 +435,14 @@ public class EngineCoreTests
     }
 
     [TestMethod]
+    public async Task Dispose_twice_does_not_throw()
+    {
+        var h = await CreateAsync();
+        await h.Core.DisposeAsync();
+        await h.Core.DisposeAsync();
+    }
+
+    [TestMethod]
     public async Task Results_persisted_after_cycle()
     {
         var h = await CreateAsync();
