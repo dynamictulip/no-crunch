@@ -16,13 +16,36 @@ internal static class SampleSolution
         }
     }
 
-    /// <summary>Copies the sample to a fresh temp dir (path contains a space) and git-inits it.</summary>
+    /// <summary>
+    /// Copies the sample to a fresh temp dir (path contains a space) and git-inits it. Uses the committed version
+    /// (git archive HEAD) so local edits made while trying the plugin by hand don't break the tests.
+    /// </summary>
     public static string CopyToTemp()
     {
         var target = Path.Combine(Path.GetTempPath(), "nocrunch tests", Guid.NewGuid().ToString("N")[..8], "Sample Repo");
-        CopyDir(SourceDir, target);
+        if (!TryExtractCommitted(target)) CopyDir(SourceDir, target);
         Git(target, "init", "-q");
         return target;
+    }
+
+    private static bool TryExtractCommitted(string target)
+    {
+        var repoRoot = Path.GetDirectoryName(Path.GetDirectoryName(SourceDir))!;
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = repoRoot, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in new[] { "archive", "--format=tar", "HEAD", "--", "samples/Sample Solution" }) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        using var tar = new MemoryStream();
+        p.StandardOutput.BaseStream.CopyTo(tar);
+        p.WaitForExit();
+        if (p.ExitCode != 0 || tar.Length == 0) return false;
+        tar.Position = 0;
+        var staging = target + ".extract";
+        Directory.CreateDirectory(staging);
+        System.Formats.Tar.TarFile.ExtractToDirectory(tar, staging, overwriteFiles: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        Directory.Move(Path.Combine(staging, "samples", "Sample Solution"), target);
+        Directory.Delete(staging, recursive: true);
+        return true;
     }
 
     private static void CopyDir(string from, string to)

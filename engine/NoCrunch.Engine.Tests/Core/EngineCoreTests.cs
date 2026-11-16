@@ -197,7 +197,7 @@ public class EngineCoreTests
     private string Abs(Harness h, string rel) => Path.Combine(h.Root, rel);
 
     [TestMethod]
-    public async Task Startup_emits_stale_then_runs_dirty_and_unknown_projects()
+    public async Task Startup_emits_stale_then_runs_all_tests()
     {
         var root = TempDir.Create();
         var store = new ResultStore(Path.Combine(root, "results.json"));
@@ -209,7 +209,8 @@ public class EngineCoreTests
         var first = h.Events.Results.First(r => r.Id.Key == old.Id.Key);
         Assert.AreEqual(TestState.Stale, first.State, "stored results are shown stale first");
         CollectionAssert.Contains(h.Tests.Runs.ToArray(), CoreTests, "test project without stored results runs");
-        Assert.IsFalse(h.Tests.Runs.Contains(Other), "project with stored results and no changes does not rerun");
+        CollectionAssert.Contains(h.Tests.Runs.ToArray(), Other, "every test project runs once startup has finished");
+        Assert.AreEqual(TestState.Passed, h.Events.Results.Last(r => r.Id.Key == old.Id.Key).State, "stale result is replaced");
         Assert.AreEqual(1, h.Build.Restores);
         Assert.IsTrue(h.Ws.Calls.Contains("reconcile"));
     }

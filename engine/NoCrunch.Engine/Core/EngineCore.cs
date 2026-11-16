@@ -52,7 +52,8 @@ public sealed class EngineCore(
             _pending.Initialize = true;
             _pending.NeedGraph = true;
             _pending.Restore = true;
-            _pending.UnknownTestProjects = true;
+            // Once the mirror is up to date, run every (non-excluded) test so results are fresh after a restart.
+            _pending.All = true;
         }
         if (stored.Count > 0) await events.TestResults(_results.Values.ToList());
         _loop = Task.Run(LoopAsync, CancellationToken.None);

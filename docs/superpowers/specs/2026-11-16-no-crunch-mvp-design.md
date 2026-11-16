@@ -104,7 +104,7 @@ Test project = `IsTestingPlatformApplication == true`. Test projects not on MTP 
 **Startup and restarts.** The mirror, its build outputs and the last test results (`.nocrunch/<SolutionName>/results.json`) survive Rider restarts. When the solution opens:
 1. The tree shows the last results, marked stale.
 2. The engine reconciles the mirror with the repo, which picks up anything that changed while Rider was closed.
-3. It runs the normal cycle for the dirty projects, plus any test project that has no stored results.
+3. It builds and runs all non-excluded tests, so results are fresh after every restart. *(Amended 2026-11-16 at your request; it originally ran only dirty projects plus test projects with no stored results.)*
 
 The very first open does a full sync, build and run. MSBuild's incremental build keeps later rebuilds cheap. *(Builder-check call.)*
 
