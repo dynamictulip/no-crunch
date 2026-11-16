@@ -1,0 +1,12 @@
+<idea-plugin>
+    <id>com.nocrunch.rider</id>
+    <name>No Crunch</name>
+    <vendor>No Crunch</vendor>
+    <description><![CDATA[
+      Continuous testing for .NET in Rider on macOS. Reruns the tests affected by your changes in an isolated
+      mirror of the repo, using Microsoft.Testing.Platform.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.rider</depends>
+</idea-plugin>

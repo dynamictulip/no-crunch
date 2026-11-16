@@ -9,3 +9,5 @@ build/
 !samples/**/*.nocrunch.user
 TestResults/
 .DS_Store
+.intellijPlatform/
+.kotlin/
