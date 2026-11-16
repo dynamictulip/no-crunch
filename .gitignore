@@ -1,0 +1,11 @@
+bin/
+obj/
+.gradle/
+build/
+.nocrunch/
+.idea/
+.superpowers/
+*.user
+!samples/**/*.nocrunch.user
+TestResults/
+.DS_Store
