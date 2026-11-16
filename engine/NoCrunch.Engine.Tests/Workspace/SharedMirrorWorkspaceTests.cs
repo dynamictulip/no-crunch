@@ -113,6 +113,20 @@ public class SharedMirrorWorkspaceTests
     }
 
     [TestMethod]
+    public async Task Sync_accepts_paths_through_a_symlinked_root()
+    {
+        var (root, layout, ws) = Setup();
+        await ws.InitializeAsync(CancellationToken.None);
+        var link = Path.Combine(Path.GetTempPath(), "nocrunch tests", "link-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateSymbolicLink(link, root);
+        Write(root, "src/App/Program.cs", "class P { int viaLink; }");
+
+        var changed = await ws.SyncAsync([Path.Combine(link, "src/App/Program.cs")], CancellationToken.None);
+
+        CollectionAssert.AreEqual(new[] { "src/App/Program.cs" }, changed.ToArray());
+    }
+
+    [TestMethod]
     public async Task Reconcile_after_branch_switch_matches_repo()
     {
         var (root, layout, ws) = Setup();

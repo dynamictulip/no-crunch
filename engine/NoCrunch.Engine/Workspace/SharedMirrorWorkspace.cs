@@ -27,7 +27,7 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
         {
             ct.ThrowIfCancellationRequested();
             string rel;
-            try { rel = map.RepoRelative(repoPath); }
+            try { rel = map.RepoRelative(RealPath.Of(repoPath)); }
             catch (ArgumentException) { continue; }
             if (rel.StartsWith("..", StringComparison.Ordinal) || rel == "." || FileFilter.IsExcluded(rel)) continue;
 
