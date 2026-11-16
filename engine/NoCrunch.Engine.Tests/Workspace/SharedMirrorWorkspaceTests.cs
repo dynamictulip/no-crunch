@@ -141,6 +141,58 @@ public class SharedMirrorWorkspaceTests
         Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/app/App.csproj")), "dir must survive a case-only rename");
     }
 
+    private static (string root, RepoLayout layout, SharedMirrorWorkspace ws) SetupRealGitRepo(string gitignore)
+    {
+        var root = TempDir.Create();
+        NoCrunch.Engine.Tests.TestSupport.SampleSolution.Git(root, "init", "-q");
+        Write(root, "Sample.slnx", "<Solution />");
+        Write(root, "src/App/App.csproj", "<Project />");
+        Write(root, "src/App/appsettings.Development.json", "{}");
+        Write(root, "plugin/.gradle/caches/huge.bin", "cache");
+        Write(root, "artifacts/My Pkg/out.nupkg", "pkg");
+        Write(root, ".gitignore", gitignore);
+        var layout = RepoLayout.Resolve(Path.Combine(root, "Sample.slnx"));
+        return (root, layout, new SharedMirrorWorkspace(layout, new PathMap(layout.RepoRoot, layout.MirrorRoot)));
+    }
+
+    [TestMethod]
+    public async Task Initialize_skips_gitignored_directories_but_copies_ignored_files()
+    {
+        var (_, layout, ws) = SetupRealGitRepo("appsettings.Development.json\n.gradle/\nartifacts/\n");
+
+        await ws.InitializeAsync(CancellationToken.None);
+
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/App/appsettings.Development.json")), "ignored files are still copied");
+        Assert.IsFalse(Directory.Exists(Path.Combine(layout.MirrorRoot, "plugin/.gradle")), "ignored directories are skipped");
+        Assert.IsFalse(Directory.Exists(Path.Combine(layout.MirrorRoot, "artifacts")), "ignored directories are skipped");
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/App/App.csproj")));
+    }
+
+    [TestMethod]
+    public async Task Sync_ignores_changes_inside_gitignored_directories()
+    {
+        var (root, _, ws) = SetupRealGitRepo("artifacts/\n");
+        await ws.InitializeAsync(CancellationToken.None);
+        Write(root, "artifacts/My Pkg/out2.nupkg", "pkg2");
+
+        var changed = await ws.SyncAsync([Path.Combine(root, "artifacts/My Pkg/out2.nupkg")], CancellationToken.None);
+
+        Assert.AreEqual(0, changed.Count);
+    }
+
+    [TestMethod]
+    public async Task Gitignore_change_removes_newly_ignored_directories_from_mirror()
+    {
+        var (root, layout, ws) = SetupRealGitRepo("");
+        await ws.InitializeAsync(CancellationToken.None);
+        Assert.IsTrue(Directory.Exists(Path.Combine(layout.MirrorRoot, "artifacts")));
+
+        Write(root, ".gitignore", "artifacts/\n");
+        await ws.SyncAsync([Path.Combine(root, ".gitignore")], CancellationToken.None);
+
+        Assert.IsFalse(Directory.Exists(Path.Combine(layout.MirrorRoot, "artifacts")));
+    }
+
     [TestMethod]
     public async Task Reconcile_after_branch_switch_matches_repo()
     {

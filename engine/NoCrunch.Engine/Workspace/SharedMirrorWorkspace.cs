@@ -8,6 +8,8 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
     private const string StopperContent = "<Project>\n  <!-- No Crunch: stops MSBuild import chains escaping the mirror into the real repo. -->\n</Project>\n";
     private static readonly string[] StopperFiles = ["Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props"];
 
+    private GitIgnoredDirectories _ignored = GitIgnoredDirectories.None;
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         Directory.CreateDirectory(layout.MirrorRoot);
@@ -29,7 +31,13 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
             string rel;
             try { rel = map.RepoRelative(RealPath.Of(repoPath)); }
             catch (ArgumentException) { continue; }
-            if (rel.StartsWith("..", StringComparison.Ordinal) || rel == "." || FileFilter.IsExcluded(rel)) continue;
+            if (rel.StartsWith("..", StringComparison.Ordinal) || rel == "." || FileFilter.IsExcluded(rel) || _ignored.Contains(rel)) continue;
+            if (Path.GetFileName(rel) == ".gitignore")
+            {
+                // Ignore rules changed: newly ignored directories leave the mirror, newly un-ignored ones arrive.
+                RefreshIgnored();
+                ReconcileDir(layout.RepoRoot, layout.MirrorRoot, changed, ct);
+            }
 
             var src = map.RepoPath(rel);
             var dst = map.MirrorPath(rel);
@@ -44,6 +52,7 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
     public Task<IReadOnlyCollection<string>> ReconcileAsync(CancellationToken ct, ISet<string>? progress = null)
     {
         var changed = new ProgressSet(progress);
+        RefreshIgnored();
         ReconcileDir(layout.RepoRoot, layout.MirrorRoot, changed, ct);
         return Task.FromResult<IReadOnlyCollection<string>>(changed.Items);
     }
@@ -71,7 +80,7 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
         foreach (var dir in Directory.EnumerateDirectories(srcDir))
         {
             var name = Path.GetFileName(dir);
-            if (FileFilter.IsExcludedDirName(name)) continue;
+            if (FileFilter.IsExcludedDirName(name) || _ignored.Contains(map.RepoRelative(dir))) continue;
             srcDirs.Add(name);
             ReconcileDir(dir, Path.Combine(dstDir, name), changed, ct);
         }
@@ -105,6 +114,8 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
             else { File.Move(from, temp); File.Move(temp, Path.Combine(dstDir, name)); }
         }
     }
+
+    private void RefreshIgnored() => _ignored = layout.IsGitRepo ? GitIgnoredDirectories.Query(layout.RepoRoot) : GitIgnoredDirectories.None;
 
     private void DeleteMirrorDir(string mirrorDir, ProgressSet changed)
     {

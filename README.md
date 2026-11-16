@@ -6,6 +6,7 @@ Save a file and No Crunch rebuilds only the projects your change affects and rer
 
 - **Project-level impact detection.** A change reruns the tests in the owning project and every test project that depends on it. Changes to repo-wide build files rerun everything.
 - **Isolated builds.** The repo is mirrored into `.nocrunch/<Solution>/mirror/` and each project is built on its own with `BuildProjectReferences=false`, so one broken project doesn't stop unrelated ones.
+- **What gets mirrored.** Everything except `bin`, `obj`, `.git`, `.idea`, `.vs`, `TestResults`, `node_modules` and **git-ignored directories** (caches, artifacts). Git-ignored *files*, such as `appsettings.Development.json`, are still copied because tests often need them.
 - **Microsoft.Testing.Platform (MTP).** Test apps are driven in MTP server mode (JSON-RPC), so you get per-test results, locations and stack traces.
 - **Exclusions.** Untick projects, classes or single tests (e.g. E2E suites) in the tool window. They're saved to `<Solution>.nocrunch.user` next to the `.sln`/`.slnx`. Commit it or ignore it, whichever suits you.
 - **Survives restarts.** Last results show as stale on startup. The engine then catches up on anything that changed while Rider was closed.
@@ -40,7 +41,6 @@ Open a solution and the **No Crunch** tool window (bottom) and status bar widget
 - **Project-level impact only.** Coverage-based selection of individual tests is planned.
 - **Snapshot and approval tests** (Verify, Shouldly `ShouldMatchApproved`) write `.received` files inside the mirror. Shouldly's normal assertion messages work fine.
 - **VSTest test projects** aren't run.
-- **Everything not excluded is mirrored, including git-ignored folders.** Large generated folders outside `bin`/`obj`/`node_modules` (e.g. `artifacts/`, `.gradle/`) are copied too.
 
 ## Development
 
