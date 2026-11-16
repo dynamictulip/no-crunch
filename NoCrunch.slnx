@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="engine/NoCrunch.Engine/NoCrunch.Engine.csproj" />
+  <Project Path="engine/NoCrunch.Engine.Tests/NoCrunch.Engine.Tests.csproj" />
+</Solution>
