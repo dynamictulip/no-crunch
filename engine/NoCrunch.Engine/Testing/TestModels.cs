@@ -20,6 +20,9 @@ public sealed record TestId(string Project, string? Type, string? Method, string
 
 public enum TestState { Discovered, Queued, Running, Passed, Failed, Skipped, Excluded, Stale }
 
+/// <summary>Whether a result came from an automatic (continuous) run or a run the user asked for.</summary>
+public enum RunKind { Auto, Manual }
+
 /// <summary>A test's latest state. <see cref="FilePath"/> and <see cref="StackTrace"/> use repo paths, never mirror paths.</summary>
 public sealed record TestResultUpdate(
     TestId Id,
@@ -29,7 +32,8 @@ public sealed record TestResultUpdate(
     string? Message,
     string? StackTrace,
     string? FilePath,
-    int? Line);
+    int? Line,
+    RunKind RunKind = RunKind.Auto);
 
 public enum ProjectRunStatus { Completed, Cancelled, Crashed, UnsupportedMtpVersion, UnsupportedNotMtp }
 

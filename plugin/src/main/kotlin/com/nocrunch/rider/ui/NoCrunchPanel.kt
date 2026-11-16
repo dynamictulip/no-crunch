@@ -20,6 +20,7 @@ import com.intellij.ui.CheckboxTreeBase
 import com.intellij.ui.CheckboxTreeListener
 import com.intellij.ui.CheckedTreeNode
 import com.intellij.ui.JBSplitter
+import com.intellij.ui.PopupHandler
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -51,6 +52,20 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private var failuresOnly = false
     private var rebuilding = false
     private var lastModel: List<ProjectNode> = emptyList()
+
+    /** Runs the selected tests now, including excluded ones; results are marked as a manual run. */
+    private val runSelectedAction: AnAction by lazy {
+        object : AnAction("Run Selected Tests (Including Excluded)", null, AllIcons.RunConfigurations.TestState.Run) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = tree.selectionPaths?.isNotEmpty() == true
+            }
+            override fun actionPerformed(e: AnActionEvent) {
+                selectedTestKeys().takeIf { it.isNotEmpty() }?.let(service::runTests)
+            }
+        }
+    }
+
 
     init {
         tree.isRootVisible = false
@@ -90,6 +105,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         status.text = StatusText.describe(service.state.value)
         // Covers plugin reloads and any case where the startup activity didn't run.
         service.start()
+        PopupHandler.installPopupMenu(tree, DefaultActionGroup(runSelectedAction), "NoCrunchTreePopup")
         val job = service.scope.launch(Dispatchers.EDT) { collect() }
         Disposer.register(parent) { job.cancel() }
     }
@@ -168,6 +184,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     append(d.displayName).append(" — ").append(d.state)
                     d.durationMs?.let { append(" (${"%.0f".format(it)} ms)") }
                     append('\n')
+                    append(if (o.manual) "Result from a manual run" else "Result from an automatic run")
+                    if (o.excluded) append(" (excluded from automatic runs)")
+                    append('\n')
                     d.message?.let { append('\n').append(it).append('\n') }
                     d.stackTrace?.let { append('\n').append(it).append('\n') }
                 }
@@ -222,9 +241,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         })
         add(simple("Run All Tests", AllIcons.RunConfigurations.TestState.Run_run) { service.runAll() })
-        add(simple("Run Selected (Including Excluded)", AllIcons.RunConfigurations.TestState.Run) {
-            selectedTestKeys().takeIf { it.isNotEmpty() }?.let(service::runTests)
-        })
+        add(runSelectedAction)
         add(object : ToggleAction("Show Failures Only", null, AllIcons.RunConfigurations.ShowIgnored) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun isSelected(e: AnActionEvent) = failuresOnly
@@ -279,7 +296,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 }
                 is TestNode -> {
                     val d = o.dto
-                    r.icon = if (o.excluded && d.state != "passed" && d.state != "failed") AllIcons.RunConfigurations.TestIgnored else testIcon(d.state)
+                    r.icon = if (o.excluded && !o.manual) AllIcons.RunConfigurations.TestIgnored else testIcon(d.state)
                     r.append(d.displayName, when {
                         o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
                         d.state == "failed" -> FAILED
@@ -288,6 +305,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     d.durationMs?.takeIf { d.state == "passed" || d.state == "failed" }?.let {
                         r.append("  ${"%.0f".format(it)} ms", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
+                    if (o.manual) r.append("  ▸ manual run", MANUAL)
+                    else if (o.excluded) r.append("  excluded", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
             }
         }
@@ -295,6 +314,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         private companion object {
             val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, com.intellij.ui.JBColor.RED)
             val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, com.intellij.ui.JBColor.RED)
+            val MANUAL = SimpleTextAttributes(SimpleTextAttributes.STYLE_ITALIC, com.intellij.ui.JBColor.BLUE)
         }
 
         private fun appendCounts(c: Counts, excluded: Boolean) {

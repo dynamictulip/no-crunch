@@ -14,6 +14,9 @@ data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0
 
 /** [locked]: excluded by an ancestor's rule, so it can't be toggled on its own. */
 data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: Boolean = false) {
+    /** The result comes from a run the user asked for, not from continuous testing. */
+    val manual: Boolean get() = dto.runKind == "manual"
+
     val counts: Counts
         get() = when {
             excluded -> Counts()

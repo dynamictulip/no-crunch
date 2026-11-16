@@ -436,6 +436,27 @@ public class EngineCoreTests
     }
 
     [TestMethod]
+    public async Task Manual_results_are_marked_and_survive_automatic_runs()
+    {
+        var h = await CreateAsync();
+        h.Core.SetExclusions(new ExclusionSet([new ExclusionRule(CoreTests, "T", "A", null)]));
+        h.Core.RunTests([$"{CoreTests}|T|A"]);
+        await h.Events.WaitIdleAsync();
+
+        var manual = h.Events.Results.Last(r => r.Id.Method == "A");
+        Assert.AreEqual(TestState.Passed, manual.State);
+        Assert.AreEqual(RunKind.Manual, manual.RunKind);
+
+        h.Core.FilesChanged([Abs(h, "src/Core/Calc.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        var afterAuto = h.Store.Load()[$"{CoreTests}|T|A"];
+        Assert.AreEqual(RunKind.Manual, afterAuto.RunKind, "an automatic run must not replace a manual result");
+        Assert.AreEqual(TestState.Stale, afterAuto.State, "the code changed since the manual run");
+        Assert.AreEqual(RunKind.Auto, h.Store.Load()[$"{CoreTests}|T|B"].RunKind);
+    }
+
+    [TestMethod]
     public async Task Dispose_twice_does_not_throw()
     {
         var h = await CreateAsync();

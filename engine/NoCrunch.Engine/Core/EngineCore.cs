@@ -83,7 +83,11 @@ public sealed class EngineCore(
             nowIncluded = _results.Values.Where(r => r.State == TestState.Excluded && !set.IsExcluded(r.Id)).Select(r => r.Id.Key).ToList();
         }
         if (nowExcluded.Count > 0) _ = events.TestResults(nowExcluded);
-        if (nowIncluded.Count > 0) RunTests(nowIncluded);
+        if (nowIncluded.Count > 0)
+        {
+            lock (_lock) _pending.RerunKeys.UnionWith(nowIncluded);
+            Signal();
+        }
     }
 
     public void RunAll()
@@ -204,7 +208,8 @@ public sealed class EngineCore(
 
             dirty.UnionWith(graph.DirtyProjects(synced));
             if (snap.All) dirty.UnionWith(graph.Projects.Select(p => p.RepoRelativePath));
-            var manualProjects = snap.ManualKeys.Select(ProjectOfKey).Where(p => graph.Find(p) is not null).ToHashSet(StringComparer.Ordinal);
+            var runKeys = snap.ManualKeys.Concat(snap.RerunKeys).ToHashSet(StringComparer.Ordinal);
+            var manualProjects = runKeys.Select(ProjectOfKey).Where(p => graph.Find(p) is not null).ToHashSet(StringComparer.Ordinal);
             var manualOnly = manualProjects.Where(p => !dirty.Contains(p)).ToHashSet(StringComparer.Ordinal);
             dirty.UnionWith(manualProjects);
             if (snap.UnknownTestProjects)
@@ -256,12 +261,12 @@ public sealed class EngineCore(
             await events.StateChanged(EngineState.Testing, runnable.Count);
             if (MaxParallelTestProjects <= 1)
             {
-                foreach (var p in runnable) await RunProjectAsync(p, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), ct);
+                foreach (var p in runnable) await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), ct);
             }
             else
             {
                 await Parallel.ForEachAsync(runnable, new ParallelOptions { MaxDegreeOfParallelism = MaxParallelTestProjects, CancellationToken = ct },
-                    async (p, token) => await RunProjectAsync(p, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), token));
+                    async (p, token) => await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), token));
             }
             ct.ThrowIfCancellationRequested();
 
@@ -294,6 +299,7 @@ public sealed class EngineCore(
             _pending.Projects.UnionWith(dirty);
             _pending.SyncedRel.UnionWith(synced);
             _pending.ManualKeys.UnionWith(snap.ManualKeys);
+            _pending.RerunKeys.UnionWith(snap.RerunKeys);
             _pending.NeedGraph |= needGraph;
             _pending.Restore |= restore;
             _pending.All |= snap.All;
@@ -305,36 +311,50 @@ public sealed class EngineCore(
         }
     }
 
-    private async Task RunProjectAsync(ProjectInfo project, IReadOnlySet<string> manualKeys, bool manualOnly, CancellationToken ct)
+    /// <param name="runKeys">Tests to run even if excluded: manual runs plus re-included tests.</param>
+    /// <param name="manualKeys">The subset the user asked to run; their results are tagged <see cref="RunKind.Manual"/>.</param>
+    private async Task RunProjectAsync(ProjectInfo project, IReadOnlySet<string> runKeys, IReadOnlySet<string> manualKeys,
+        bool manualOnly, CancellationToken ct)
     {
         var first = true;
+        TestResultUpdate Tag(TestResultUpdate r) => r with { RunKind = manualKeys.Contains(r.Id.Key) ? RunKind.Manual : RunKind.Auto };
+
         var outcome = await tests.RunAsync(project,
             id =>
             {
-                if (manualKeys.Contains(id.Key)) return true;
+                if (runKeys.Contains(id.Key)) return true;
                 if (manualOnly) return false;
                 lock (_lock) return !_exclusions.IsExcluded(id);
             },
-            async batch =>
+            async raw =>
             {
                 if (ct.IsCancellationRequested) return;
+                var batch = raw.Select(Tag).ToList();
                 if (first)
                 {
                     first = false;
+                    var discovered = new List<TestResultUpdate>(batch.Count);
                     lock (_lock)
                     {
+                        var previous = _results.Values.Where(r => r.Id.Project == project.RepoRelativePath)
+                            .ToDictionary(r => r.Id.Key, StringComparer.Ordinal);
                         if (!manualOnly)
-                            foreach (var key in _results.Keys.Where(k => _results[k].Id.Project == project.RepoRelativePath).ToList())
-                                _results.Remove(key);
+                            foreach (var key in previous.Keys) _results.Remove(key);
                         foreach (var r in batch)
                         {
+                            var hasPrevious = previous.TryGetValue(r.Id.Key, out var prev);
                             // A manual-only run reports untouched tests as Excluded; keep their previous result instead.
-                            if (manualOnly && !manualKeys.Contains(r.Id.Key) && _results.ContainsKey(r.Id.Key)) continue;
-                            _results[r.Id.Key] = r;
+                            if (manualOnly && !runKeys.Contains(r.Id.Key) && hasPrevious) continue;
+                            // An automatic run skips excluded tests; keep the result of an earlier manual run of them.
+                            var keep = r.State == TestState.Excluded && hasPrevious && prev!.RunKind == RunKind.Manual
+                                       && prev.State != TestState.Excluded;
+                            var current = keep ? prev! : r;
+                            _results[r.Id.Key] = current;
+                            discovered.Add(current);
                         }
                     }
-                    if (manualOnly) await events.TestResults(batch.Where(r => manualKeys.Contains(r.Id.Key)).ToList());
-                    else await events.TestsDiscovered(project.RepoRelativePath, batch);
+                    if (manualOnly) await events.TestResults(batch.Where(r => runKeys.Contains(r.Id.Key)).ToList());
+                    else await events.TestsDiscovered(project.RepoRelativePath, discovered);
                 }
                 else
                 {
@@ -367,6 +387,8 @@ public sealed class EngineCore(
         public HashSet<string> SyncedRel { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Projects { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ManualKeys { get; } = new(StringComparer.Ordinal);
+        /// <summary>Tests to run once as part of normal (automatic) testing, e.g. just re-included.</summary>
+        public HashSet<string> RerunKeys { get; } = new(StringComparer.Ordinal);
         public bool Reconcile { get; set; }
         public bool Initialize { get; set; }
         public bool NeedGraph { get; set; }
@@ -374,7 +396,7 @@ public sealed class EngineCore(
         public bool All { get; set; }
         public bool UnknownTestProjects { get; set; }
 
-        public bool IsEmpty => Files.Count == 0 && SyncedRel.Count == 0 && Projects.Count == 0 && ManualKeys.Count == 0
+        public bool IsEmpty => Files.Count == 0 && SyncedRel.Count == 0 && Projects.Count == 0 && ManualKeys.Count == 0 && RerunKeys.Count == 0
                                && !Reconcile && !Initialize && !NeedGraph && !Restore && !All && !UnknownTestProjects;
     }
 }

@@ -131,4 +131,17 @@ class TestTreeModelTest {
     fun counts_label_shows_all_three() {
         assertEquals("✔ 2  ✖ 1  ○ 3", Counts(passed = 2, failed = 1, pending = 3).label())
     }
+
+    @Test
+    fun manual_results_are_flagged_and_excluded_ones_keep_their_outcome() {
+        val manualFail = t(e2e, "B.Flow", "Checkout", "failed").copy(runKind = "manual")
+        val auto = t(unit, "A.Calc", "Adds", "passed").copy(runKind = "auto")
+        val tree = TestTreeModel.build(listOf(manualFail, auto), emptyMap(), listOf(ExclusionRuleDto(e2e)), false)
+
+        val manualNode = tree.single { it.path == e2e }.children.single().children.single()
+        assertTrue(manualNode.manual)
+        assertTrue(manualNode.excluded)
+        assertEquals("failed", manualNode.dto.state)
+        assertFalse(tree.single { it.path == unit }.children.single().children.single().manual)
+    }
 }

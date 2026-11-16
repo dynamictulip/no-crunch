@@ -25,6 +25,8 @@ data class TestResultDto(
     val stackTrace: String?,
     val filePath: String?,
     val line: Int?,
+    /** auto (continuous run) or manual (the user asked for it). */
+    val runKind: String? = "auto",
 )
 
 /** status: succeeded, failed, blocked, cancelled */
