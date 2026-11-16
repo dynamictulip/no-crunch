@@ -67,21 +67,32 @@ public sealed class ProjectGraph
 
     public IReadOnlySet<string> DirtyProjects(IEnumerable<string> changedRepoRelativePaths)
     {
-        var dirty = new HashSet<string>(StringComparer.Ordinal);
-        var queue = new Queue<string>();
+        var owners = new HashSet<string>(StringComparer.Ordinal);
         foreach (var path in changedRepoRelativePaths)
         {
             if (IsGlobalBuildFile(path)) return _byPath.Keys.ToHashSet(StringComparer.Ordinal);
-            foreach (var owner in OwnersOf(path))
-                if (dirty.Add(owner)) queue.Enqueue(owner);
+            owners.UnionWith(OwnersOf(path));
         }
+        return WithDependents(owners);
+    }
+
+    /// <summary>The given projects plus everything that transitively references them.</summary>
+    public IReadOnlySet<string> WithDependents(IEnumerable<string> projects) => Closure(projects, p => _dependents.GetValueOrDefault(p) ?? []);
+
+    /// <summary>The given projects plus everything they transitively reference.</summary>
+    public IReadOnlySet<string> WithReferences(IEnumerable<string> projects) =>
+        Closure(projects, p => _byPath.TryGetValue(p, out var info) ? info.ProjectReferences : []);
+
+    private IReadOnlySet<string> Closure(IEnumerable<string> start, Func<string, IEnumerable<string>> next)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        foreach (var p in start.Where(_byPath.ContainsKey))
+            if (result.Add(p)) queue.Enqueue(p);
         while (queue.Count > 0)
-        {
-            if (!_dependents.TryGetValue(queue.Dequeue(), out var deps)) continue;
-            foreach (var d in deps)
-                if (dirty.Add(d)) queue.Enqueue(d);
-        }
-        return dirty;
+            foreach (var n in next(queue.Dequeue()).Where(_byPath.ContainsKey))
+                if (result.Add(n)) queue.Enqueue(n);
+        return result;
     }
 
     /// <summary>The given projects ordered so each comes after the projects it references (Kahn's algorithm).</summary>

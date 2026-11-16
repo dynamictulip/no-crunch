@@ -31,6 +31,6 @@ public sealed record TestResultUpdate(
     string? FilePath,
     int? Line);
 
-public enum ProjectRunStatus { Completed, Cancelled, Crashed, UnsupportedMtpVersion }
+public enum ProjectRunStatus { Completed, Cancelled, Crashed, UnsupportedMtpVersion, UnsupportedNotMtp }
 
 public sealed record ProjectRunOutcome(string Project, ProjectRunStatus Status, string? Error);

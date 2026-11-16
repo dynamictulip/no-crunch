@@ -6,7 +6,7 @@ using NoCrunch.Engine.Layout;
 namespace NoCrunch.Engine.Testing;
 
 /// <summary>Discovers and runs one MTP test application via server mode (JSON-RPC).</summary>
-public sealed class MtpTestRunner(PathMap map)
+public sealed class MtpTestRunner(PathMap map) : NoCrunch.Engine.Core.ITestStep
 {
     private const string ProtocolErrorExitCodeHint = "12";
 
