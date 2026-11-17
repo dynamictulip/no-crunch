@@ -18,4 +18,8 @@ public interface IWorkspaceStrategy
     Task<IReadOnlyCollection<string>> ReconcileAsync(CancellationToken ct, ISet<string>? progress = null);
 
     string MirrorPathOf(string repoRelativePath);
+
+    /// <summary>True if a change to this repo path matters: it's inside the repo and would be mirrored
+    /// (not .git/.idea/bin/obj, not a git-ignored directory, not No Crunch's own files).</summary>
+    bool Tracks(string repoPath);
 }

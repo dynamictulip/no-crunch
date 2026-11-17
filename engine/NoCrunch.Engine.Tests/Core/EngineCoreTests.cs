@@ -28,6 +28,9 @@ public class EngineCoreTests
         public Func<CancellationToken, Task> SyncGate { get; set; } = _ => Task.CompletedTask;
         private readonly HashSet<string> _alreadyInMirror = [];
 
+        public Func<string, bool> TracksPath { get; set; } = _ => true;
+        public bool Tracks(string repoPath) => TracksPath(repoPath);
+
         public Task InitializeAsync(CancellationToken ct) { Calls.Enqueue("init"); return Task.CompletedTask; }
 
         public async Task<IReadOnlyCollection<string>> SyncAsync(IReadOnlyCollection<string> paths, CancellationToken ct, ISet<string>? progress = null)
@@ -524,6 +527,19 @@ public class EngineCoreTests
 
         var paused = h.Events.States.Where(s => s.state == EngineState.Paused).Select(s => s.queued).ToList();
         CollectionAssert.AreEqual(new[] { 0, 2, 3 }, paused, "count updates as changes arrive while paused");
+    }
+
+    [TestMethod]
+    public async Task Paused_count_only_includes_files_the_workspace_tracks()
+    {
+        var h = await CreateAsync();
+        h.Ws.TracksPath = p => !p.Contains("/.git/");
+        h.Core.Pause();
+        await Task.Delay(300);
+        h.Core.FilesChanged([Abs(h, "src/Core/Calc.cs"), Abs(h, ".git/index"), Abs(h, ".git/logs/HEAD")]);
+        await Task.Delay(300);
+
+        Assert.AreEqual(1, h.Events.States.Last(s => s.state == EngineState.Paused).queued);
     }
 
     [TestMethod]

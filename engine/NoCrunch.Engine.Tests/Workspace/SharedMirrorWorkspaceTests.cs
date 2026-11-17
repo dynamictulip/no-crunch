@@ -194,6 +194,21 @@ public class SharedMirrorWorkspaceTests
     }
 
     [TestMethod]
+    public async Task Tracks_only_files_that_would_be_mirrored()
+    {
+        var (root, _, ws) = SetupRealGitRepo("artifacts/\n");
+        await ws.InitializeAsync(CancellationToken.None);
+
+        Assert.IsTrue(ws.Tracks(Path.Combine(root, "src/App/Program.cs")));
+        Assert.IsTrue(ws.Tracks(Path.Combine(root, "src/App/appsettings.Development.json")));
+        Assert.IsFalse(ws.Tracks(Path.Combine(root, ".git/index")));
+        Assert.IsFalse(ws.Tracks(Path.Combine(root, "src/App/bin/Debug/App.dll")));
+        Assert.IsFalse(ws.Tracks(Path.Combine(root, "artifacts/My Pkg/out.nupkg")), "git-ignored directory");
+        Assert.IsFalse(ws.Tracks(Path.Combine(root, "Sample.nocrunch.user")), "No Crunch's own exclusions file");
+        Assert.IsFalse(ws.Tracks("/somewhere/else/File.cs"));
+    }
+
+    [TestMethod]
     public async Task Reconcile_after_branch_switch_matches_repo()
     {
         var (root, layout, ws) = Setup();

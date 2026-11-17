@@ -66,9 +66,12 @@ public sealed class EngineCore(
 
     public void FilesChanged(IReadOnlyCollection<string> repoPaths)
     {
+        // Ignore changes that can't affect builds or tests (.git, bin/obj, git-ignored folders, our own files).
+        var tracked = repoPaths.Where(workspace.Tracks).ToList();
+        if (tracked.Count == 0) return;
         lock (_lock)
         {
-            _pending.Files.UnionWith(repoPaths);
+            _pending.Files.UnionWith(tracked);
             if (_pending.Files.Count > ReconcileThreshold) { _pending.Reconcile = true; _pending.Files.Clear(); }
         }
         Signal();

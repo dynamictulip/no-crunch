@@ -59,6 +59,16 @@ public sealed class SharedMirrorWorkspace(RepoLayout layout, PathMap map) : IWor
 
     public string MirrorPathOf(string repoRelativePath) => map.MirrorPath(repoRelativePath);
 
+    public bool Tracks(string repoPath)
+    {
+        string rel;
+        try { rel = map.RepoRelative(RealPath.Of(repoPath)); }
+        catch (ArgumentException) { return false; }
+        return !rel.StartsWith("..", StringComparison.Ordinal) && rel != "."
+               && !FileFilter.IsExcluded(rel) && !_ignored.Contains(rel)
+               && !rel.EndsWith(".nocrunch.user", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>macOS (APFS default) and Windows file systems are case-insensitive; a case-only rename is the same entry.</summary>
     private static readonly StringComparer NameComparer =
         OperatingSystem.IsMacOS() || OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;

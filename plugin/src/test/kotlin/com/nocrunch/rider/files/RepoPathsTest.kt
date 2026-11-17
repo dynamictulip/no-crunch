@@ -25,4 +25,17 @@ class RepoPathsTest {
 
         assertEquals(listOf("$real/src/A.cs", "$real/src/Deleted.cs"), result)
     }
+
+    @Test
+    fun drops_tool_and_build_folders_and_the_exclusions_file() {
+        val root = dir.toRealPath().resolve("repo").also { Files.createDirectories(it) }.toString()
+        val paths = listOf(
+            "$root/src/A.cs",
+            "$root/.git/index", "$root/.idea/.idea.S/.idea/workspace.xml", "$root/.vs/x",
+            "$root/src/App/bin/Debug/App.dll", "$root/src/App/obj/project.assets.json",
+            "$root/web/node_modules/x.js", "$root/tests/TestResults/r.trx",
+            "$root/My Shop.nocrunch.user",
+        )
+        assertEquals(listOf("$root/src/A.cs"), RepoPaths.relevant(paths, root))
+    }
 }
