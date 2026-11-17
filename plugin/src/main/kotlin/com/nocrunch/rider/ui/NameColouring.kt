@@ -67,6 +67,43 @@ enum class NameColouring(val title: String) {
         fun topLevel(text: String): List<String> = topLevelArgs(text).map { it.text }
 
         /**
+         * Pads data rows such as `(price: 0.05, percent: 50)` so their arguments line up in a monospace font: each
+         * argument starts in the same column, and a column whose values are all numbers is right-aligned. Rows are
+         * returned unchanged unless they all have the same number of arguments with the same names.
+         */
+        fun alignArgs(rows: List<String>): List<String> {
+            if (rows.size < 2) return rows
+            val parsed = rows.map { row ->
+                if (row.length < 2 || row.first() != '(' || row.last() != ')') return rows
+                topLevelArgs(row.substring(1, row.length - 1)).map { a ->
+                    val m = NAMED_ARG.matchEntire(a.text)
+                    if (m != null) m.groupValues[2] to m.groupValues[4] else "" to a.text.trim()
+                }
+            }
+            val columns = parsed.first().size
+            if (parsed.any { it.size != columns }) return rows
+            if ((0 until columns).any { c -> parsed.map { it[c].first }.distinct().size > 1 }) return rows
+            val widths = (0 until columns).map { c -> parsed.maxOf { it[c].second.length } }
+            val numeric = (0 until columns).map { c -> parsed.all { NUMBER.matches(it[c].second) } }
+            // Numbers are padded before the value; text after the comma that follows it.
+            return parsed.map { args ->
+                buildString {
+                    append('(')
+                    args.forEachIndexed { c, (name, value) ->
+                        val pad = " ".repeat(widths[c] - value.length)
+                        if (name.isNotEmpty()) append(name).append(": ")
+                        if (numeric[c]) append(pad)
+                        append(value)
+                        if (c < columns - 1) { append(", "); if (!numeric[c]) append(pad) }
+                    }
+                    append(')')
+                }
+            }
+        }
+
+        private val NUMBER = Regex("""[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?[fFdDmMlLuU]*""")
+
+        /**
          * Adds parameter names to a row's arguments when the framework left them out (MSTest's `(150)` with
          * `ms` → `(ms: 150)`). Left alone if any argument is already named or the counts don't match.
          */

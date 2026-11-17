@@ -606,6 +606,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             val r = textRenderer
             val editing = showCheckboxes()
             val obj = (value as? CheckedTreeNode)?.userObject
+            // Data rows use the editor's monospace font so their argument columns line up.
+            r.font = if ((obj as? TestNode)?.isRow == true) monospace(tree.font) else tree.font
             // Build-error rows have nothing to include or exclude.
             // Theory rows follow their theory; they can't be included or excluded on their own.
             checkbox.isVisible = editing && obj !is BuildErrorsGroup && (obj as? ProjectNode)?.isTestProject != false &&
@@ -691,6 +693,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             NameColouring.split(name, mode).forEach { (text, colour) ->
                 textRenderer.append(text, SimpleTextAttributes(style, colour?.let { NAME_PARTS[it] }))
             }
+        }
+
+        private fun monospace(base: java.awt.Font): java.awt.Font {
+            val name = com.intellij.openapi.editor.colors.EditorColorsManager.getInstance().globalScheme.editorFontName
+            return java.awt.Font(name, java.awt.Font.PLAIN, base.size)
         }
 
         /** Theory row arguments: each name and value takes the next colour, whichever colouring mode is on. */

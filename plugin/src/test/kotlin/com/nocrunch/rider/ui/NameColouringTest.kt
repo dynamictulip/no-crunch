@@ -99,4 +99,36 @@ class NameColouringTest {
         assertEquals("(quantity: 1)", NameColouring.withNames("(quantity: 1)", listOf("quantity")), "already named")
         assertEquals("(1, 2)", NameColouring.withNames("(1, 2)", listOf("a")), "count mismatch")
     }
+
+    @Test
+    fun rows_line_up_with_numbers_right_aligned() =
+        assertEquals(
+            listOf(
+                "(price:  0.05, percent: 50, expected:  0.03)",
+                "(price: 19.99, percent: 15, expected: 16.99)",
+                "(price:   100, percent:  0, expected:   100)",
+            ),
+            NameColouring.alignArgs(listOf(
+                "(price: 0.05, percent: 50, expected: 0.03)",
+                "(price: 19.99, percent: 15, expected: 16.99)",
+                "(price: 100, percent: 0, expected: 100)",
+            )),
+        )
+
+    @Test
+    fun text_columns_are_left_aligned() =
+        assertEquals(
+            listOf("(sku: \"abc-1234\", valid: False)", "(sku: \"ABC1234\",  valid: True)"),
+            NameColouring.alignArgs(listOf("(sku: \"abc-1234\", valid: False)", "(sku: \"ABC1234\", valid: True)")),
+        )
+
+    @Test
+    fun rows_with_different_arguments_are_left_alone() {
+        val rows = listOf("(a: 1)", "(b: 22)")
+        assertEquals(rows, NameColouring.alignArgs(rows))
+    }
+
+    @Test
+    fun aligned_rows_still_colour_names_and_values() =
+        assertEquals("(:- price:0 :   :- 100:1 ):-", args("(price:   100)"))
 }
