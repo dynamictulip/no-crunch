@@ -146,7 +146,7 @@ public sealed class EngineCore(
     private async Task LoopAsync()
     {
         var stop = _stop.Token;
-        var announcedPause = false;
+        var announcedWaiting = -1;
         while (!stop.IsCancellationRequested)
         {
             await CurrentSignal().WaitAsync(stop);
@@ -163,11 +163,13 @@ public sealed class EngineCore(
             {
                 if (_paused)
                 {
-                    if (!announcedPause) _ = events.StateChanged(EngineState.Paused, _pending.Projects.Count);
-                    announcedPause = true;
+                    // While paused, "queued" is the number of changed files waiting (re-announced as it grows).
+                    var waiting = _pending.WaitingFiles;
+                    if (waiting != announcedWaiting) _ = events.StateChanged(EngineState.Paused, waiting);
+                    announcedWaiting = waiting;
                     continue;
                 }
-                announcedPause = false;
+                announcedWaiting = -1;
                 if (_pending.IsEmpty) continue;
                 snapshot = _pending;
                 _pending = new Pending();
@@ -428,6 +430,9 @@ public sealed class EngineCore(
         public bool Restore { get; set; }
         public bool All { get; set; }
         public bool UnknownTestProjects { get; set; }
+
+        /// <summary>Changed files not yet built; a pending full reconcile counts as "more than the threshold".</summary>
+        public int WaitingFiles => Reconcile ? Math.Max(Files.Count + SyncedRel.Count, ReconcileThreshold + 1) : Files.Count + SyncedRel.Count;
 
         public bool IsEmpty => Files.Count == 0 && SyncedRel.Count == 0 && Projects.Count == 0 && ManualKeys.Count == 0 && RerunKeys.Count == 0
                                && !Reconcile && !Initialize && !NeedGraph && !Restore && !All && !UnknownTestProjects;

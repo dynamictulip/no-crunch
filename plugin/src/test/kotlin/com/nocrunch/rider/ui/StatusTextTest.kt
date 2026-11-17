@@ -30,4 +30,12 @@ class StatusTextTest {
     fun service_state_starts_as_starting() {
         assertEquals("starting", EngineUiState.initial().state)
     }
+
+    @Test
+    fun waiting_changes_while_paused() {
+        assertEquals("No changes waiting", StatusText.waiting(0))
+        assertEquals("1 changed file waiting", StatusText.waiting(1))
+        assertEquals("12 changed files waiting", StatusText.waiting(12))
+        assertEquals("200+ changed files waiting", StatusText.waiting(201))
+    }
 }

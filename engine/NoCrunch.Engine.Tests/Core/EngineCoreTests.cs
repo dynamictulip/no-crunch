@@ -120,8 +120,12 @@ public class EngineCoreTests
         private int _idle;
         public SemaphoreSlim IdleSignal { get; } = new(0);
 
+        public ConcurrentQueue<(EngineState state, int queued)> StatesQueue { get; } = new();
+        public List<(EngineState state, int queued)> States => StatesQueue.ToList();
+
         public Task StateChanged(EngineState state, int queuedProjects)
         {
+            StatesQueue.Enqueue((state, queuedProjects));
             Log.Enqueue("state:" + state);
             if (state == EngineState.Idle) { Interlocked.Increment(ref _idle); IdleSignal.Release(); }
             return Task.CompletedTask;
@@ -505,6 +509,21 @@ public class EngineCoreTests
         Assert.IsNull(a.LastOutcome);
         Assert.IsNull(a.Message);
         Assert.AreEqual(TestState.Passed, second.Store.Load()[$"{CoreTests}|T|B"].State, "non-excluded tests run as normal");
+    }
+
+    [TestMethod]
+    public async Task Paused_reports_how_many_changed_files_are_waiting()
+    {
+        var h = await CreateAsync();
+        h.Core.Pause();
+        await Task.Delay(300);
+        h.Core.FilesChanged([Abs(h, "src/Core/Calc.cs"), Abs(h, "src/Core/Other.cs")]);
+        await Task.Delay(300);
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await Task.Delay(300);
+
+        var paused = h.Events.States.Where(s => s.state == EngineState.Paused).Select(s => s.queued).ToList();
+        CollectionAssert.AreEqual(new[] { 0, 2, 3 }, paused, "count updates as changes arrive while paused");
     }
 
     [TestMethod]

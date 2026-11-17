@@ -5,6 +5,11 @@ import org.junit.jupiter.api.Test
 
 class CupcakeIconTest {
     @Test
+    fun paused_shows_the_pause_cupcake_whatever_the_results() {
+        BarColour.entries.forEach { assertEquals(CupcakeIcon.Variant.PAUSED, CupcakeIcon.variantFor(it, paused = true)) }
+    }
+
+    @Test
     fun icon_follows_the_bar_colour() {
         assertEquals(CupcakeIcon.Variant.PASS, CupcakeIcon.variantFor(BarColour.PASSING))
         assertEquals(CupcakeIcon.Variant.FAIL, CupcakeIcon.variantFor(BarColour.FAILING))

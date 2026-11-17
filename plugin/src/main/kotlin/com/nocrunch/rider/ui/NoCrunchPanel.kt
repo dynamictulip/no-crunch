@@ -52,6 +52,26 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private val tree = CheckboxTree(Renderer { choosingTests }, root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
     private val details = DetailsPane(project, parent)
     private val bar = ProgressBar()
+    private val cards = JPanel(java.awt.CardLayout())
+    private val waitingLabel = JBLabel().apply { foreground = com.intellij.util.ui.UIUtil.getContextHelpForeground() }
+    private val pausedView: JPanel = JPanel(java.awt.GridBagLayout()).apply {
+        val column = JPanel().apply {
+            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
+            isOpaque = false
+            fun centred(c: javax.swing.JComponent) = c.apply { alignmentX = java.awt.Component.CENTER_ALIGNMENT }
+            add(centred(JBLabel("<html><div style='text-align:center'>No Crunch is paused.<br>Results are hidden until you resume.</div></html>")
+                .apply { foreground = com.intellij.util.ui.UIUtil.getContextHelpForeground() }))
+            add(javax.swing.Box.createVerticalStrut(JBUI.scale(14)))
+            add(centred(javax.swing.JButton("Resume", AllIcons.Actions.Execute).apply {
+                font = com.intellij.util.ui.JBFont.h3().asBold()
+                com.intellij.ui.ClientProperty.put(this, com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI.DEFAULT_STYLE_KEY, true)
+                addActionListener { service.resume() }
+            }))
+            add(javax.swing.Box.createVerticalStrut(JBUI.scale(10)))
+            add(centred(waitingLabel))
+        }
+        add(column)
+    }
     private var failuresOnly = false
     private val settings = com.nocrunch.rider.settings.NoCrunchSettings.getInstance(project)
     private var rebuilding = false
@@ -105,11 +125,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             secondComponent = details.component
         }
         // NCrunch-style status bar across the top, above the tree and details.
-        setContent(JPanel(BorderLayout()).apply {
+        val results = JPanel(BorderLayout()).apply {
             add(bar, BorderLayout.NORTH)
             add(splitter, BorderLayout.CENTER)
-        })
-        toolbar = ActionManager.getInstance().createActionToolbar("NoCrunch", toolbarActions(), true)
+        }
+        cards.add(results, RESULTS_CARD)
+        cards.add(pausedView, PAUSED_CARD)
+        setContent(cards)
+        toolbar = ActionManager.getInstance().createActionToolbar("NoCrunch", pausable(toolbarActions()), true)
             .apply { targetComponent = this@NoCrunchPanel }.component
 
         tree.emptyText.text = StatusText.emptyTree(service.state.value)
@@ -143,6 +166,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         last = s
         val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs, settings.state.hideExcluded)
         bar.update(barState(s))
+        // While paused, results can't be trusted, so hide them behind a big Resume button.
+        val paused = s.state.state == "paused"
+        if (paused) waitingLabel.text = StatusText.waiting(s.state.queued)
+        (cards.layout as java.awt.CardLayout).show(cards, if (paused) PAUSED_CARD else RESULTS_CARD)
         tree.emptyText.text = StatusText.emptyTree(s.state)
         if (model == lastModel) return
         lastModel = model
@@ -293,6 +320,26 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         }
 
+    /** Greys out every toolbar action except Settings while No Crunch is paused. */
+    private fun pausable(group: DefaultActionGroup): DefaultActionGroup = DefaultActionGroup().apply {
+        group.getChildActionsOrStubs().forEach { a ->
+            add(if (a is Separator || a.templatePresentation.text == "Settings") a else wrapForPause(a))
+        }
+    }
+
+    private fun wrapForPause(a: AnAction): AnAction {
+        val paused = { service.state.value.state == "paused" }
+        return if (a is com.intellij.openapi.actionSystem.ActionGroup) {
+            object : com.intellij.openapi.actionSystem.ActionGroupWrapper(a) {
+                override fun update(e: AnActionEvent) { super.update(e); if (paused()) e.presentation.isEnabled = false }
+            }
+        } else {
+            object : com.intellij.openapi.actionSystem.AnActionWrapper(a) {
+                override fun update(e: AnActionEvent) { super.update(e); if (paused()) e.presentation.isEnabled = false }
+            }
+        }
+    }
+
     private fun toolbarActions() = DefaultActionGroup().apply {
         add(object : AnAction() {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
@@ -387,6 +434,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     }
 
     private companion object {
+        const val RESULTS_CARD = "results"
+        const val PAUSED_CARD = "paused"
+
         /** The run-all icon with a small "+" badge: run everything, plus the excluded tests. */
         val RUN_ALL_INCLUDING_EXCLUDED: Icon = com.intellij.ui.LayeredIcon(2).apply {
             setIcon(AllIcons.RunConfigurations.TestState.Run_run, 0)

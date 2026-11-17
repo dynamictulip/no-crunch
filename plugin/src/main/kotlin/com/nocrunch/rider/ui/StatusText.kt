@@ -24,5 +24,13 @@ object StatusText {
         else -> describe(s)
     }
 
+    /** Shown on the paused screen. The engine reports more than 200 when a full re-scan is pending. */
+    fun waiting(files: Int): String = when {
+        files <= 0 -> "No changes waiting"
+        files == 1 -> "1 changed file waiting"
+        files > 200 -> "200+ changed files waiting"
+        else -> "$files changed files waiting"
+    }
+
     private fun projects(n: Int) = if (n == 1) "1 project" else "$n projects"
 }
