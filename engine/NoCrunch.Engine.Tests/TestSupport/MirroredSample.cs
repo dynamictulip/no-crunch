@@ -15,6 +15,8 @@ internal sealed record MirroredSample(RepoLayout Layout, PathMap Map, SharedMirr
         var map = new PathMap(layout.RepoRoot, layout.MirrorRoot);
         var ws = new SharedMirrorWorkspace(layout, map);
         await ws.InitializeAsync(CancellationToken.None);
+        // Restore first, as the engine does: package-provided test settings only appear after restore.
+        await new ProjectBuilder(new ProcessRunner(), map, "dotnet").RestoreAsync(map.ToMirror(layout.SolutionPath), CancellationToken.None);
         var graph = await ProjectGraph.LoadAsync(layout, new DotnetMsBuildQuery(new ProcessRunner(), map, "dotnet"), CancellationToken.None);
         return new MirroredSample(layout, map, ws, graph);
     }

@@ -128,17 +128,16 @@ object TestTreeModel {
                         rules.any { it.project == path && it.type == type && it.method == null && it.uid == null }
                     val classExcluded = projectExcluded || ownClassRule ||
                         (type == UNKNOWN_CLASS && members.isNotEmpty() && members.all { isExcluded(it, rules) })
-                    // Rows that share a UID with a row-less entry belong to that theory: its data was only known at run time.
-                    val theoryUids = members.filter { it.variant == null }.map { it.uid }.toSet()
-                    val (rowDtos, topLevel) = members.partition { it.variant != null && it.uid in theoryUids }
-                    val rowsByUid = rowDtos.groupBy { it.uid }
+                    // Data rows of theories whose rows were only known at run time nest under their theory.
+                    val keys = members.map { it.key }.toSet()
+                    val (rowDtos, topLevel) = members.partition { it.theoryKey != null && it.theoryKey in keys }
+                    val rowsByTheory = rowDtos.groupBy { it.theoryKey }
                     fun node(d: TestResultDto, isRow: Boolean = false) =
                         TestNode(d, projectExcluded || ownClassRule || isExcluded(d, rules), locked = projectExcluded || ownClassRule || isRow, isRow = isRow)
                     val nodes = topLevel
                         .sortedWith(compareBy({ it.method ?: it.displayName }, { it.displayName }))
                         .map { d ->
-                            node(d).copy(rows = rowsByUid[d.uid].orEmpty().filter { d.variant == null }
-                                .sortedBy { it.displayName }.map { node(it, isRow = true) })
+                            node(d).copy(rows = rowsByTheory[d.key].orEmpty().sortedBy { it.displayName }.map { node(it, isRow = true) })
                         }
                         .filter { !failuresOnly || it.dto.state == "failed" }
                         .filter { !hideExcluded || !it.excluded }

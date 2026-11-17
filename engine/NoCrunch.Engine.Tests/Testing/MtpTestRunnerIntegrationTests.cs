@@ -53,6 +53,24 @@ public class MtpTestRunnerIntegrationTests
 
     [TestMethod]
     [Timeout(120_000)]
+    public async Task XUnit_theory_with_unserialisable_data_reports_its_rows_under_the_theory_uid()
+    {
+        var (outcome, updates) = await Run(_sample, "Shop.Theory.Tests");
+
+        Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
+        var discovered = updates.Where(u => u.State == TestState.Queued && u.Id.Method?.StartsWith("Ten_percent_off_never_costs_more") == true).ToList();
+        Assert.AreEqual(1, discovered.Count, "the theory is discovered once, without its rows");
+        var rows = Final(updates).Values.Where(u => u.Id.Uid == discovered[0].Id.Uid && u.Id.Key != discovered[0].Id.Key).ToList();
+        Assert.AreEqual(3, rows.Count, "each data row reports a result with the theory's UID");
+        Assert.IsTrue(rows.All(r => r.State == TestState.Passed), string.Join("\n", rows.Select(r => r.Message)));
+
+        var listed = Final(updates).Values.Where(u => u.Id.Method?.StartsWith("Bulk_percent") == true).ToList();
+        Assert.AreEqual(4, listed.Count, "serialisable rows are listed one by one");
+        Assert.AreEqual(4, listed.Select(r => r.Id.Uid).Distinct().Count(), "each with its own UID");
+    }
+
+    [TestMethod]
+    [Timeout(120_000)]
     public async Task ShouldRun_false_reports_excluded_and_does_not_run()
     {
         var (outcome, updates) = await Run(_sample, "Shop.Core.Tests", id => id.Method != "Total_zero_qty");

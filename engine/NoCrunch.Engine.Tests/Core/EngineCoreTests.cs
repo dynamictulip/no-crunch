@@ -233,6 +233,20 @@ public class EngineCoreTests
     }
 
     [TestMethod]
+    public async Task Graph_is_loaded_after_restore_so_package_provided_test_settings_are_seen()
+    {
+        var h = await CreateAsync(start: false);
+        var restoresWhenGraphLoaded = new List<int>();
+        h.Graph.Gate = _ => { restoresWhenGraphLoaded.Add(h.Build.Restores); return Task.CompletedTask; };
+
+        await h.Core.StartAsync(CancellationToken.None);
+        await h.Events.WaitIdleAsync();
+
+        Assert.AreEqual(1, h.Build.Restores);
+        CollectionAssert.AreEqual(new[] { 1 }, restoresWhenGraphLoaded, "restore runs before the graph is read");
+    }
+
+    [TestMethod]
     public async Task Debounces_bursts_into_one_cycle()
     {
         var h = await CreateAsync();
@@ -462,6 +476,7 @@ public class EngineCoreTests
         Assert.AreEqual(20.0, stored[TheoryKey].DurationMs, "run time is the rows' total");
         Assert.AreEqual(TestState.Passed, stored[RowKey("Th(1)")].State);
         Assert.AreEqual(TestState.Failed, stored[RowKey("Th(2)")].State);
+        Assert.AreEqual(TheoryKey, stored[RowKey("Th(1)")].TheoryKey, "rows say which theory they belong to");
     }
 
     [TestMethod]

@@ -29,6 +29,8 @@ data class TestResultDto(
     val runKind: String? = "auto",
     /** The last finished outcome (passed/failed/skipped) while the test is stale, queued, running or excluded. */
     val lastOutcome: String? = null,
+    /** Set on a data row of a theory whose rows are only known at run time: the theory's key. */
+    val theoryKey: String? = null,
 )
 
 /** status: succeeded, failed, blocked, cancelled */

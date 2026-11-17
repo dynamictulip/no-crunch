@@ -34,7 +34,8 @@ public sealed record TestResultUpdate(
     string? FilePath,
     int? Line,
     RunKind RunKind = RunKind.Auto,
-    TestState? LastOutcome = null)
+    TestState? LastOutcome = null,
+    string? TheoryKey = null)
 {
     /// <summary>A finished state: the test actually ran.</summary>
     public bool IsOutcome => State is TestState.Passed or TestState.Failed or TestState.Skipped;

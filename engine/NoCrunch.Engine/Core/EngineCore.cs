@@ -203,18 +203,20 @@ public sealed class EngineCore(
             if (snap.Initialize) await workspace.InitializeAsync(ct);
 
             if (_graph is null || synced.Any(ProjectGraph.IsGraphFile)) needGraph = true;
-            if (needGraph)
-            {
-                _graph = await loadGraph(ct);
-                restore = true;
-                needGraph = false;
-            }
-            var graph = _graph!;
+            // Restore before reading the graph: test settings that come from NuGet packages (e.g. xUnit v3 marking a
+            // project as an MTP test app) are only imported once restore has written obj/*.nuget.g.props.
+            if (needGraph) restore = true;
             if (restore)
             {
                 await build.RestoreAsync(MirrorSolutionPath, ct);
                 restore = false;
             }
+            if (needGraph)
+            {
+                _graph = await loadGraph(ct);
+                needGraph = false;
+            }
+            var graph = _graph!;
 
             dirty.UnionWith(graph.DirtyProjects(synced));
             if (snap.All) dirty.UnionWith(graph.Projects.Select(p => p.RepoRelativePath));
@@ -368,7 +370,11 @@ public sealed class EngineCore(
                         var rows = previous.Values
                             .Where(p => theories.TryGetValue(p.Id.Uid, out var tk) && tk != p.Id.Key)
                             .Select(p => (theory: batch.First(b => b.Id.Key == theories[p.Id.Uid]), row: p))
-                            .Select(x => x.row with { State = x.theory.State, RunKind = x.theory.RunKind, DurationMs = null, Message = null, StackTrace = null });
+                            .Select(x => x.row with
+                            {
+                                State = x.theory.State, RunKind = x.theory.RunKind, TheoryKey = x.theory.Id.Key,
+                                DurationMs = null, Message = null, StackTrace = null,
+                            });
                         foreach (var r in batch.Concat(rows.ToList()))
                         {
                             var hasPrevious = previous.TryGetValue(r.Id.Key, out var prev);
@@ -390,12 +396,15 @@ public sealed class EngineCore(
                     List<TestResultUpdate> merged;
                     lock (_lock)
                     {
-                        merged = batch.Select(r => CarryForward(r, _results.GetValueOrDefault(r.Id.Key))).ToList();
+                        // Tag theory rows with their theory so clients can nest them (names alone can't tell them apart).
+                        merged = batch
+                            .Select(r => theories.TryGetValue(r.Id.Uid, out var tk) && tk != r.Id.Key ? r with { TheoryKey = tk } : r)
+                            .Select(r => CarryForward(r, _results.GetValueOrDefault(r.Id.Key))).ToList();
                         foreach (var r in merged) _results[r.Id.Key] = r;
                         // A row result means its theory is running; the theory's own result is settled when the run ends.
                         foreach (var r in merged.ToList())
                         {
-                            if (!theories.TryGetValue(r.Id.Uid, out var tk) || tk == r.Id.Key) continue;
+                            if (r.TheoryKey is not { } tk) continue;
                             if (!rowsSeen.TryGetValue(tk, out var seen)) rowsSeen[tk] = seen = [];
                             seen.RemoveAll(x => x.Id.Key == r.Id.Key);
                             seen.Add(r);
