@@ -20,7 +20,6 @@ import com.intellij.ui.CheckboxTree
 import com.intellij.ui.CheckboxTreeBase
 import com.intellij.ui.CheckboxTreeListener
 import com.intellij.ui.CheckedTreeNode
-import com.intellij.ui.JBSplitter
 import com.intellij.ui.PopupHandler
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
@@ -219,8 +218,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         })
 
-        val splitter = JBSplitter(false, 0.55f).apply {
-            firstComponent = JBScrollPane(tree)
+        // A visible 1px divider (Rider's border colour), so it's clear long rows run under the details pane.
+        val splitter = com.intellij.ui.OnePixelSplitter(false, 0.55f).apply {
+            firstComponent = JBScrollPane(tree).apply { border = com.intellij.util.ui.JBUI.Borders.empty() }
             secondComponent = details.component
         }
         // NCrunch-style status bar across the top, above the tree and details.
