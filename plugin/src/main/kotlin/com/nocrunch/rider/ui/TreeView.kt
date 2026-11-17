@@ -39,7 +39,7 @@ sealed interface ViewNode {
 }
 
 data class TestView(val node: TestNode) : ViewNode {
-    override val label get() = node.dto.displayName
+    override val label get() = node.label
     override val leaves get() = listOf(node)
     override val rules get() = listOf(TestTreeModel.ruleFor(node.dto))
     override val excluded get() = node.excluded

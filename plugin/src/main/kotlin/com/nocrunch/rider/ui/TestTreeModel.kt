@@ -28,9 +28,13 @@ data class TestNode(
     val parentExcluded: Boolean = false,
 ) {
     /** Rows show just their arguments; everything else shows the full display name. */
+    /**
+     * Rows show just their arguments. Everything else drops the class prefix some frameworks put in display names
+     * (xUnit's `Namespace.Class.Method(...)`), since the class is already the row above.
+     */
     val label: String
         get() = if (isRow) dto.displayName.indexOf('(').takeIf { it >= 0 }?.let { dto.displayName.substring(it) } ?: dto.displayName
-        else dto.displayName
+        else dto.type?.let { dto.displayName.removePrefix("$it.") } ?: dto.displayName
 
     /** Run time that counts towards parents: excluded tests only count once run by hand. */
     val countedDurationMs: Double? get() = if (excluded && !manual) null else dto.durationMs

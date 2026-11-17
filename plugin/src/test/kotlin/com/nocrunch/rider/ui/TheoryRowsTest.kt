@@ -26,6 +26,12 @@ class TheoryRowsTest {
     )
 
     @Test
+    fun test_names_drop_the_class_prefix() {
+        val cls = TestTreeModel.build(tests, emptyMap(), emptyList(), false).single().children.single()
+        assertEquals(listOf("Enrich_Line", "Other(x: 1)", "Other(x: 2)"), cls.children.map { it.label })
+    }
+
+    @Test
     fun rows_reported_only_at_run_time_nest_under_their_theory() {
         val cls = TestTreeModel.build(tests, emptyMap(), emptyList(), false).single().children.single()
         assertEquals(3, cls.children.size, "theory plus the two listed rows")
