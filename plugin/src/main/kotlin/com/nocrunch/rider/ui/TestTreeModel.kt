@@ -29,6 +29,8 @@ data class TestNode(
     val isRow: Boolean = false,
     val parentExcluded: Boolean = false,
     val grouped: Boolean = false,
+    /** Parameter names from the source, for rows whose display name only has values. */
+    val argNames: List<String>? = null,
 ) {
     /** Keys to ask the engine to run for this node. */
     val runKeys: List<String> get() = if (grouped) rows.map { it.dto.key } else listOf(dto.key)
@@ -38,7 +40,7 @@ data class TestNode(
      * (xUnit's `Namespace.Class.Method(...)`), since the class is already the row above.
      */
     val label: String
-        get() = if (isRow) dto.displayName.indexOf('(').takeIf { it >= 0 }?.let { dto.displayName.substring(it) } ?: dto.displayName
+        get() = if (isRow) dto.displayName.indexOf('(').takeIf { it >= 0 }?.let { NameColouring.withNames(dto.displayName.substring(it), argNames) } ?: dto.displayName
         else dto.type?.let { dto.displayName.removePrefix("$it.") } ?: dto.displayName
 
     /** Run time that counts towards parents: excluded tests only count once run by hand. */
@@ -132,6 +134,8 @@ object TestTreeModel {
         failuresOnly: Boolean,
         runs: Map<String, RunFinishedDto> = emptyMap(),
         hideExcluded: Boolean = false,
+        /** Parameter names of a test's method, read from its source; used to label data rows that only show values. */
+        paramNames: (TestResultDto) -> List<String>? = { null },
     ): List<ProjectNode> {
         val byProject = tests.groupBy { it.project }
         val brokenBuilds = builds.values.filter { it.status in setOf("failed", "blocked") }.map { it.project }
@@ -159,6 +163,7 @@ object TestTreeModel {
                             node(d).copy(rows = rowsByTheory[d.key].orEmpty().sortedBy { it.displayName }.map { node(it, isRow = true) })
                         }
                         .let { groupListedRows(it, rules, classExcluded) }
+                        .map { n -> if (n.rows.isEmpty()) n else n.copy(rows = n.rows.map { r -> r.copy(argNames = paramNames(r.dto)) }) }
                         .filter { !failuresOnly || it.dto.state == "failed" }
                         .filter { !hideExcluded || !it.excluded }
                     ClassNode(path, type, classExcluded, nodes, parentExcluded = projectExcluded)

@@ -261,9 +261,22 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private var last: Snapshot? = null
 
+    /** Source text by path, re-read when the file changes; for parameter names of data rows. */
+    private val sourceCache = HashMap<String, Pair<Long, String>>()
+
+    private fun paramNames(d: com.nocrunch.rider.engine.TestResultDto): List<String>? {
+        val path = d.filePath ?: return null
+        val line = d.line ?: return null
+        val file = java.io.File(path)
+        val modified = file.lastModified().takeIf { it > 0 } ?: return null
+        val text = sourceCache[path]?.takeIf { it.first == modified }?.second
+            ?: runCatching { file.readText() }.getOrNull()?.also { sourceCache[path] = modified to it } ?: return null
+        return TestLocator.parameterNames(text, line - 1, d.method?.substringBefore('('))
+    }
+
     private fun render(s: Snapshot) {
         last = s
-        val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs, settings.state.hideExcluded)
+        val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs, settings.state.hideExcluded, ::paramNames)
         bar.update(barState(s))
         // While paused, results can't be trusted, so hide them behind a big Resume button.
         val paused = s.state.state == "paused"

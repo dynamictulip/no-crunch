@@ -50,4 +50,20 @@ class TestLocatorTest {
         assertEquals("public void Empty() { }", lineText(TestLocator.firstBodyLine(source, 17, "Empty")))
         assertEquals(null, TestLocator.firstBodyLine(source, 2, "NotThere"))
     }
+
+    @Test
+    fun parameter_names_skip_types_attributes_and_defaults() {
+        val src = """
+            |[TestMethod]
+            |[DataRow(25)]
+            |public async Task Waits(int ms) { }
+            |
+            |public void Many(Dictionary<string, int> map, [Range(1, 2)] int count, string @class = "a, b") { }
+            |public void None() { }
+        """.trimMargin()
+        assertEquals(listOf("ms"), TestLocator.parameterNames(src, 0, "Waits"))
+        assertEquals(listOf("map", "count", "class"), TestLocator.parameterNames(src, 4, "Many"))
+        assertEquals(emptyList<String>(), TestLocator.parameterNames(src, 5, "None"))
+        assertEquals(null, TestLocator.parameterNames(src, 0, "Missing"))
+    }
 }

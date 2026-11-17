@@ -63,6 +63,20 @@ enum class NameColouring(val title: String) {
 
         private class Arg(val separator: String, val text: String)
 
+        /** The arguments of [text] split on top-level commas, as written (spaces included). */
+        fun topLevel(text: String): List<String> = topLevelArgs(text).map { it.text }
+
+        /**
+         * Adds parameter names to a row's arguments when the framework left them out (MSTest's `(150)` with
+         * `ms` → `(ms: 150)`). Left alone if any argument is already named or the counts don't match.
+         */
+        fun withNames(text: String, names: List<String>?): String {
+            if (names.isNullOrEmpty() || text.length < 2 || text.first() != '(' || text.last() != ')') return text
+            val args = topLevelArgs(text.substring(1, text.length - 1)).map { it.text.trim() }
+            if (args.size != names.size || args.any { NAMED_ARG.matches(it) }) return text
+            return names.zip(args).joinToString(", ", "(", ")") { (n, v) -> "$n: $v" }
+        }
+
         /** Splits on commas that aren't inside quotes, brackets or braces; each arg remembers the comma (and spaces) before it. */
         private fun topLevelArgs(s: String): List<Arg> {
             val out = mutableListOf<Arg>()

@@ -91,4 +91,12 @@ class NameColouringTest {
     @Test
     fun text_that_is_not_an_argument_list_stays_plain() =
         assertEquals("row 1:-", args("row 1"))
+
+    @Test
+    fun names_are_added_to_rows_that_only_have_values() {
+        assertEquals("(ms: 150)", NameColouring.withNames("(150)", listOf("ms")))
+        assertEquals("(price: 100, percent: 10, expected: 90)", NameColouring.withNames("(100,10,90)", listOf("price", "percent", "expected")))
+        assertEquals("(quantity: 1)", NameColouring.withNames("(quantity: 1)", listOf("quantity")), "already named")
+        assertEquals("(1, 2)", NameColouring.withNames("(1, 2)", listOf("a")), "count mismatch")
+    }
 }
