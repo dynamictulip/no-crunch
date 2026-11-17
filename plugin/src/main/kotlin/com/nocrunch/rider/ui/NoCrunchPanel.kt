@@ -654,6 +654,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     when {
                         o.excluded && !o.manual -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.label, if (o.freshness == null) FAILED else STALE_FAILED)
+                        o.isRow -> appendArgs(o.label)
                         else -> appendName(o.label)
                     }
                     if (o.rows.isNotEmpty()) appendCounts(o.counts, o.excluded)
@@ -676,6 +677,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             val mode = colouring().let { if (parent && it != NameColouring.OFF) NameColouring.PASCAL else it }
             NameColouring.split(name, mode).forEach { (text, colour) ->
                 textRenderer.append(text, SimpleTextAttributes(style, colour?.let { NAME_PARTS[it] }))
+            }
+        }
+
+        /** Theory row arguments: each name and value takes the next colour, whichever colouring mode is on. */
+        private fun appendArgs(text: String) {
+            if (colouring() == NameColouring.OFF) { textRenderer.append(text, SimpleTextAttributes.REGULAR_ATTRIBUTES); return }
+            NameColouring.splitArgs(text).forEach { (t, colour) ->
+                textRenderer.append(t, colour?.let { SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, NAME_PARTS[it]) } ?: SimpleTextAttributes.REGULAR_ATTRIBUTES)
             }
         }
 

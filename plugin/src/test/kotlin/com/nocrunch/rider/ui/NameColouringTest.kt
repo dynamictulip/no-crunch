@@ -67,4 +67,28 @@ class NameColouringTest {
         assertEquals("HTTP2:0 Request:1", show("HTTP2Request", NameColouring.PASCAL))
         assertEquals("Get:0 2:1 Items:2", show("Get2Items", NameColouring.PASCAL))
     }
+
+    private fun args(text: String) = NameColouring.splitArgs(text).joinToString(" ") { (t, c) -> "$t:${c ?: "-"}" }
+
+    @Test
+    fun theory_rows_give_each_argument_name_and_value_the_next_colour() =
+        assertEquals(
+            "(:- quantity:0 : :- 10:1 , :- expected:2 : :- 5:0 , :- sku:1 : :- \"ABC-1234\":2 ):-",
+            args("(quantity: 10, expected: 5, sku: \"ABC-1234\")"),
+        )
+
+    @Test
+    fun values_with_commas_inside_quotes_or_braces_stay_whole() =
+        assertEquals(
+            "(:- scenario:0 : :- \"a, b\":1 , :- product:2 : :- Product { Sku = X, Price = 1 }:0 ):-",
+            args("(scenario: \"a, b\", product: Product { Sku = X, Price = 1 })"),
+        )
+
+    @Test
+    fun unnamed_arguments_each_take_the_next_colour() =
+        assertEquals("(:- 100:0 ,:- 10:1 ,:- 90:2 ):-", args("(100,10,90)"))
+
+    @Test
+    fun text_that_is_not_an_argument_list_stays_plain() =
+        assertEquals("row 1:-", args("row 1"))
 }

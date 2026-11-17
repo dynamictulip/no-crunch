@@ -28,6 +28,72 @@ enum class NameColouring(val title: String) {
         }
 
         /**
+         * Splits a theory row's arguments, such as `(quantity: 10, sku: "A, B")`, so each argument name and each value
+         * takes the next colour. Values stay whole, including commas inside quotes, brackets or braces. Text that
+         * isn't a bracketed argument list comes back as one plain segment.
+         */
+        fun splitArgs(text: String): List<Pair<String, Int?>> {
+            if (text.length < 2 || text.first() != '(' || text.last() != ')') return listOf(text to null)
+            val out = mutableListOf<Pair<String, Boolean>>("(" to false)
+            topLevelArgs(text.substring(1, text.length - 1)).forEachIndexed { i, arg ->
+                if (i > 0) out += arg.separator to false
+                val m = NAMED_ARG.matchEntire(arg.text)
+                if (m != null) {
+                    val (lead, name, colon, value, trail) = m.destructured
+                    if (lead.isNotEmpty()) out += lead to false
+                    out += name to true
+                    out += colon to false
+                    out += value to true
+                    if (trail.isNotEmpty()) out += trail to false
+                } else {
+                    val lead = arg.text.takeWhile { it.isWhitespace() }
+                    val value = arg.text.trim()
+                    if (lead.isNotEmpty()) out += lead to false
+                    if (value.isNotEmpty()) out += value to true
+                    val trail = arg.text.takeLastWhile { it.isWhitespace() }.takeIf { value.isNotEmpty() }.orEmpty()
+                    if (trail.isNotEmpty()) out += trail to false
+                }
+            }
+            out += ")" to false
+            var next = 0
+            return out.map { (t, coloured) -> t to if (coloured) next++ % COLOURS else null }
+        }
+
+        private val NAMED_ARG = Regex("""(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:\s*)(.*?)(\s*)""", RegexOption.DOT_MATCHES_ALL)
+
+        private class Arg(val separator: String, val text: String)
+
+        /** Splits on commas that aren't inside quotes, brackets or braces; each arg remembers the comma (and spaces) before it. */
+        private fun topLevelArgs(s: String): List<Arg> {
+            val out = mutableListOf<Arg>()
+            var depth = 0
+            var quote: Char? = null
+            var start = 0
+            var sep = ""
+            var i = 0
+            while (i < s.length) {
+                val c = s[i]
+                when {
+                    quote != null -> if (c == '\\') i++ else if (c == quote) quote = null
+                    c == '"' || c == '\'' -> quote = c
+                    c in "([{" -> depth++
+                    c in ")]}" -> depth = maxOf(0, depth - 1)
+                    c == ',' && depth == 0 -> {
+                        out += Arg(sep, s.substring(start, i))
+                        var j = i + 1
+                        while (j < s.length && s[j] == ' ') j++
+                        sep = s.substring(i, j)
+                        start = j
+                        i = j - 1
+                    }
+                }
+                i++
+            }
+            out += Arg(sep, s.substring(start))
+            return out
+        }
+
+        /**
          * PascalCase words. A new word starts at a capital after a lower-case letter, at a capital followed by lower
          * case after a capital or digit (`HTTPResponse` → `HTTP`, `Response`), and at digits after a lower-case
          * letter (`Returns404`). Digits after a capital stay with it, so acronyms like `E2E` and `HTTP2` are one word.
