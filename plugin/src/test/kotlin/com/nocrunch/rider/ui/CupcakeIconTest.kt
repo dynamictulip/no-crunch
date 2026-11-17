@@ -12,11 +12,23 @@ class CupcakeIconTest {
         assertEquals(CupcakeIcon.Variant.PLAIN, CupcakeIcon.variantFor(BarColour.NEUTRAL))
     }
 
+    private val files = CupcakeIcon.Variant.entries.flatMap { v ->
+        listOf("", "_dark", "@20x20", "@20x20_dark").map { v.path.replace(".svg", "$it.svg") }
+    }
+
     @Test
-    fun each_variant_has_light_and_dark_svgs() {
-        CupcakeIcon.Variant.entries.forEach { v ->
-            listOf(v.path, v.path.replace(".svg", "_dark.svg")).forEach { p ->
-                requireNotNull(CupcakeIcon::class.java.getResource(p)) { "missing $p" }
+    fun each_variant_has_light_dark_and_new_ui_sizes() {
+        files.forEach { p -> requireNotNull(CupcakeIcon::class.java.getResource(p)) { "missing $p" } }
+    }
+
+    @Test
+    fun colours_are_set_on_each_shape_so_the_ide_can_recolour_selected_icons() {
+        files.forEach { p ->
+            val svg = CupcakeIcon::class.java.getResource(p)!!.readText()
+            val root = Regex("<svg[^>]*>").find(svg)!!.value
+            kotlin.test.assertFalse(root.contains("stroke=\""), "$p: no stroke on the root element")
+            Regex("<path[^>]*>").findAll(svg).forEach { path ->
+                kotlin.test.assertTrue(path.value.contains("stroke=\""), "$p: every path sets its own stroke: ${path.value}")
             }
         }
     }

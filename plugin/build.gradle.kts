@@ -25,6 +25,7 @@ dependencies {
         testFramework(TestFrameworkType.Platform)
     }
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
+    testImplementation(kotlin("test"))
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.13.4")
     testImplementation("junit:junit:4.13.2")
 }
