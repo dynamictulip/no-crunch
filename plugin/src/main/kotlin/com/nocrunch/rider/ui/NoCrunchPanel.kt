@@ -376,6 +376,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             add(runSelectedAction)
         })
         addSeparator()
+        // Tree
+        // Standard IntelliJ expand/collapse-all actions (same icons and shortcuts as other trees).
+        val expander = com.intellij.ide.DefaultTreeExpander(tree)
+        add(com.intellij.ide.CommonActionsManager.getInstance().createExpandAllAction(expander, tree))
+        add(com.intellij.ide.CommonActionsManager.getInstance().createCollapseAllAction(expander, tree))
+        addSeparator()
+        // Filter and display
         add(object : ToggleAction("Show Failures Only", null, AllIcons.RunConfigurations.ShowIgnored) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun isSelected(e: AnActionEvent) = failuresOnly
@@ -385,15 +392,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 last?.let(::render)
             }
         })
-        // Standard IntelliJ expand/collapse-all actions (same icons and shortcuts as other trees).
-        val expander = com.intellij.ide.DefaultTreeExpander(tree)
-        add(com.intellij.ide.CommonActionsManager.getInstance().createExpandAllAction(expander, tree))
-        add(com.intellij.ide.CommonActionsManager.getInstance().createCollapseAllAction(expander, tree))
-        add(object : ToggleAction("Choose Automatic Tests", "Show checkboxes: ticked tests run automatically", AllIcons.Actions.Edit) {
+        add(object : ToggleAction("Hide Excluded Tests", null, AllIcons.Actions.ToggleVisibility) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
-            override fun isSelected(e: AnActionEvent) = choosingTests
+            override fun isSelected(e: AnActionEvent) = settings.state.hideExcluded
             override fun setSelected(e: AnActionEvent, state: Boolean) {
-                choosingTests = state
+                settings.state.hideExcluded = state
                 lastModel = emptyList()
                 last?.let(::render)
             }
@@ -428,11 +431,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 })
             }
         })
-        add(object : ToggleAction("Hide Excluded Tests", null, AllIcons.Actions.ToggleVisibility) {
+        addSeparator()
+        // Mode: tick which tests run automatically
+        add(object : ToggleAction("Choose Automatic Tests", "Show checkboxes: ticked tests run automatically", AllIcons.Actions.Edit) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
-            override fun isSelected(e: AnActionEvent) = settings.state.hideExcluded
+            override fun isSelected(e: AnActionEvent) = choosingTests
             override fun setSelected(e: AnActionEvent, state: Boolean) {
-                settings.state.hideExcluded = state
+                choosingTests = state
                 lastModel = emptyList()
                 last?.let(::render)
             }
