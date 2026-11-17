@@ -389,7 +389,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         val expander = com.intellij.ide.DefaultTreeExpander(tree)
         add(com.intellij.ide.CommonActionsManager.getInstance().createExpandAllAction(expander, tree))
         add(com.intellij.ide.CommonActionsManager.getInstance().createCollapseAllAction(expander, tree))
-        add(object : ToggleAction("Choose Automatic Tests", "Show checkboxes: ticked tests run automatically", AllIcons.Actions.Checked) {
+        add(object : ToggleAction("Choose Automatic Tests", "Show checkboxes: ticked tests run automatically", AllIcons.Actions.Edit) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun isSelected(e: AnActionEvent) = choosingTests
             override fun setSelected(e: AnActionEvent, state: Boolean) {
