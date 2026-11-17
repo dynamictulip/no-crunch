@@ -46,6 +46,18 @@ class TreeViewTest {
     }
 
     @Test
+    fun namespaces_are_shown_relative_to_the_projects_own_namespace() {
+        val shop = "tests/Shop.Unit/Shop.Unit.csproj"
+        val p = TestTreeModel.build(tests.map { it.copy(project = shop, key = it.key.replace(unit, shop)) }, emptyMap(), emptyList(), false).single()
+
+        val view = TreeView.of(p, ViewMode.NAMESPACES)
+
+        assertEquals(listOf("OtherTests", "Pricing"), labels(view), "classes in the project's namespace sit directly under it")
+        assertTrue(view.single { it.label == "OtherTests" } is ClassView)
+        assertEquals(listOf("CalcTests", "TaxTests"), labels((view.single { it.label == "Pricing" } as GroupView).children))
+    }
+
+    @Test
     fun files_view_groups_tests_by_folder_then_file() {
         val view = TreeView.of(project(), ViewMode.FILES)
         assertEquals(listOf("Pricing", "OtherTests.cs", TreeView.NO_FILE), labels(view))

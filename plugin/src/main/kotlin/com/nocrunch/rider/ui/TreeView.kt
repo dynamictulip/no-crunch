@@ -138,12 +138,21 @@ object TreeView {
         else -> 5
     }
 
+    /**
+     * Namespaces are shown relative to the project's own (assumed to match the project name, as it does by default):
+     * classes in it sit directly under the project, and `Shop.Tests.Pricing` shows as `Pricing`. Other namespaces keep
+     * their full name.
+     */
     private fun byNamespace(project: ProjectNode): List<ViewNode> {
+        val root = project.name
+        fun relative(ns: String) = if (ns == root) "" else ns.removePrefix("$root.")
         val (withNs, without) = project.children.partition { it.type.contains('.') && it.type != TestTreeModel.UNKNOWN_CLASS }
-        val groups = withNs.groupBy { it.type.substringBeforeLast('.') }.toSortedMap().map { (ns, classes) ->
+        val byNs = withNs.groupBy { relative(it.type.substringBeforeLast('.')) }
+        val groups = byNs.filterKeys { it.isNotEmpty() }.toSortedMap().map { (ns, classes) ->
             GroupView(ns, GroupKind.NAMESPACE, classes.map { ClassView(it, it.type.substringAfterLast('.')) }, project.excluded)
         }
-        return groups + without.map { ClassView(it, it.type) }
+        val atRoot = byNs[""].orEmpty().map { ClassView(it, it.type.substringAfterLast('.')) }
+        return groups + atRoot + without.map { ClassView(it, it.type) }
     }
 
     private fun byFile(project: ProjectNode): List<ViewNode> {
