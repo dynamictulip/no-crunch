@@ -29,6 +29,26 @@ public class ExclusionSetTests
     }
 
     [TestMethod]
+    public void Include_rule_inside_an_excluded_parent_brings_that_test_back()
+    {
+        var set = new ExclusionSet([
+            new ExclusionRule(Unit, null, null, null),
+            new ExclusionRule(Unit, "A.C", null, null, Include: true),
+            new ExclusionRule(Unit, "A.C", "Slow", null),
+        ]);
+        Assert.IsTrue(set.IsExcluded(T(Unit, "A.Other", "One")), "project rule still applies elsewhere");
+        Assert.IsFalse(set.IsExcluded(T(Unit, "A.C", "One")), "class include beats project exclude");
+        Assert.IsTrue(set.IsExcluded(T(Unit, "A.C", "Slow")), "method exclude beats class include");
+    }
+
+    [TestMethod]
+    public void Include_rule_alone_excludes_nothing()
+    {
+        var set = new ExclusionSet([new ExclusionRule(Unit, "A.C", "One", null, Include: true)]);
+        Assert.IsFalse(set.IsExcluded(T(Unit, "A.C", "One")));
+    }
+
+    [TestMethod]
     public void Method_rule_excludes_single_test()
     {
         var set = new ExclusionSet([new ExclusionRule(Unit, "A.C", "One", null)]);

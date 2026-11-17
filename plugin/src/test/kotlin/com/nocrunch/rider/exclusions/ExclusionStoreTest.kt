@@ -24,6 +24,7 @@ class ExclusionStoreTest {
             ExclusionRuleDto("tests/Unit/Unit.csproj", "A.Slow", null, null),
             ExclusionRuleDto("tests/Unit/Unit.csproj", "A.C", "One", null),
             ExclusionRuleDto("tests/Unit/Unit.csproj", null, null, "uid-1"),
+            ExclusionRuleDto("tests/E2E/E2E.csproj", "B.Smoke", include = true),
         )
         store.save(rules)
 
@@ -31,6 +32,8 @@ class ExclusionStoreTest {
         val json = Files.readString(dir.resolve("S.nocrunch.user"))
         assertTrue(json.contains("\"version\": 1"), json)
         assertTrue(json.contains("\"excluded\""), json)
+        assertTrue(json.contains("\"included\""), json)
+        assertTrue(!json.contains("\"include\""), "exceptions go in their own list, not a flag on each rule: $json")
     }
 
     @Test

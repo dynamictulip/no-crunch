@@ -139,8 +139,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
 
     fun setExcluded(changed: List<ExclusionRuleDto>, excluded: Boolean) {
         val updated = _exclusions.updateAndGetRules { rules ->
-            val without = rules.filterNot { it in changed }
-            if (excluded) without + changed else without
+            changed.fold(rules) { acc, target -> com.nocrunch.rider.exclusions.ExclusionRules.toggle(acc, target, excluded) }
         }
         // One writer, always saving the latest rules, so quick toggles can't land out of order.
         cs.launch(saveDispatcher) { exclusionStore?.save(_exclusions.value) }

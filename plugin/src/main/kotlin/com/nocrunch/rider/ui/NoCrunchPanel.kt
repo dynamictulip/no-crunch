@@ -307,7 +307,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         }.distinct()
     }
 
-    /** Selected rows that can be included/excluded on their own (not locked by an excluded parent), with their rules. */
+    /** Selected rows that can be included/excluded on their own (everything except theory data rows), with their rules. */
     private fun selectedExclusionTargets(): List<Pair<Boolean, List<com.nocrunch.rider.engine.ExclusionRuleDto>>> =
         tree.selectionPaths.orEmpty().mapNotNull { p ->
             when (val o = (p.lastPathComponent as? CheckedTreeNode)?.userObject) {
@@ -522,7 +522,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     appendFreshness(o.freshness)
                     appendManual(o.manualCount)
                     // Without checkboxes, say which rows are left out of automatic runs.
-                    if (o.excluded && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                    if (o.excluded && !o.parentExcluded && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
                 is TestNode -> {
                     val d = o.dto
@@ -540,7 +540,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     appendFreshness(o.freshness)
                     // A theory's rows share its run, so only the theory says it was a manual run.
                     if (o.manual && !o.isRow) r.append("  ▸ manual run", MANUAL)
-                    else if (o.excluded && !o.locked && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                    else if (o.excluded && !o.parentExcluded && !o.isRow && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
             }
         }

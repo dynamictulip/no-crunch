@@ -8,7 +8,14 @@ data class InitializeParams(val solutionPath: String, val dotnetPath: String?, v
 
 data class InitializeResult(val protocolVersion: Int, val repoRoot: String, val mirrorRoot: String)
 
-data class ExclusionRuleDto(val project: String, val type: String? = null, val method: String? = null, val uid: String? = null)
+/** [include]: an exception that brings back tests a broader rule excludes. */
+data class ExclusionRuleDto(
+    val project: String,
+    val type: String? = null,
+    val method: String? = null,
+    val uid: String? = null,
+    val include: Boolean = false,
+)
 
 data class TestResultDto(
     val key: String,

@@ -11,15 +11,20 @@ import java.nio.file.StandardCopyOption
 
 /** Reads and writes `<Solution>.nocrunch.user` next to the solution file. */
 class ExclusionStore(val file: Path) {
-    private data class FileModel(val version: Int = 1, val excluded: List<ExclusionRuleDto> = emptyList())
+    /** On disk, exclusions and their exceptions are separate lists of plain rules. */
+    private data class Rule(val project: String?, val type: String?, val method: String?, val uid: String?)
+    private data class FileModel(val version: Int = 1, val excluded: List<Rule>? = emptyList(), val included: List<Rule>? = null)
+
+    private fun Rule.toDto(include: Boolean) = project?.takeIf { it.isNotBlank() }?.let { ExclusionRuleDto(it, type, method, uid, include) }
+    private fun ExclusionRuleDto.toRule() = Rule(project, type, method, uid)
 
     private val gson = GsonBuilder().setPrettyPrinting().serializeNulls().create()
 
     fun load(): List<ExclusionRuleDto> {
         if (!Files.exists(file)) return emptyList()
         return try {
-            gson.fromJson(Files.readString(file), FileModel::class.java)?.excluded.orEmpty()
-                .filter { it.project.isNotBlank() }
+            val model = gson.fromJson(Files.readString(file), FileModel::class.java) ?: return emptyList()
+            model.excluded.orEmpty().mapNotNull { it.toDto(include = false) } + model.included.orEmpty().mapNotNull { it.toDto(include = true) }
         } catch (e: JsonParseException) {
             LOG.warn("Ignoring unreadable exclusions file $file", e)
             emptyList()
@@ -33,7 +38,9 @@ class ExclusionStore(val file: Path) {
         Files.createDirectories(file.parent)
         val tmp = Files.createTempFile(file.parent, file.fileName.toString(), ".tmp")
         try {
-            Files.writeString(tmp, gson.toJson(FileModel(1, rules)) + "\n")
+            val (included, excluded) = rules.partition { it.include }
+            val model = FileModel(1, excluded.map { it.toRule() }, included.map { it.toRule() }.takeIf { it.isNotEmpty() })
+            Files.writeString(tmp, gson.toJson(model) + "\n")
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         } finally {
             Files.deleteIfExists(tmp)

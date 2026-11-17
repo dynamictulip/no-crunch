@@ -3,8 +3,13 @@ namespace NoCrunch.Engine.Testing;
 /// <summary>
 /// One exclusion. Project only = whole project; + Type = whole class; + Type + Method = one test (all its data rows);
 /// Project + Uid = one test by UID (for frameworks that report no location).
+/// <see cref="Include"/> turns it into an exception: the tests it matches run even though a broader rule excludes them.
 /// </summary>
-public sealed record ExclusionRule(string Project, string? Type, string? Method, string? Uid);
+public sealed record ExclusionRule(string Project, string? Type, string? Method, string? Uid, bool Include = false)
+{
+    /// <summary>0 = project, 1 = class, 2 = single test. The most specific matching rule decides.</summary>
+    public int Specificity => Uid is not null || Method is not null ? 2 : Type is not null ? 1 : 0;
+}
 
 public sealed class ExclusionSet(IEnumerable<ExclusionRule> rules)
 {
@@ -14,7 +19,17 @@ public sealed class ExclusionSet(IEnumerable<ExclusionRule> rules)
 
     public IReadOnlyList<ExclusionRule> Rules => _rules;
 
-    public bool IsExcluded(TestId id) => _rules.Any(r => Matches(r, id));
+    /// <summary>The most specific matching rule decides; if two equally specific rules disagree, exclusion wins.</summary>
+    public bool IsExcluded(TestId id)
+    {
+        ExclusionRule? best = null;
+        foreach (var r in _rules)
+        {
+            if (!Matches(r, id)) continue;
+            if (best is null || r.Specificity > best.Specificity || (r.Specificity == best.Specificity && !r.Include)) best = r;
+        }
+        return best is { Include: false };
+    }
 
     private static bool Matches(ExclusionRule rule, TestId id)
     {

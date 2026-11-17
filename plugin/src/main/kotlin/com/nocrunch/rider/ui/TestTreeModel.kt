@@ -4,6 +4,7 @@ import com.nocrunch.rider.engine.BuildFinishedDto
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.RunFinishedDto
 import com.nocrunch.rider.engine.TestResultDto
+import com.nocrunch.rider.exclusions.ExclusionRules
 
 /** Pending = queued, running, stale or just discovered. Skipped tests, and excluded tests that haven't been run by hand, aren't counted. */
 data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0) {
@@ -13,7 +14,8 @@ data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0
 }
 
 /**
- * [locked]: excluded by an ancestor's rule, so it can't be toggled on its own.
+ * [locked]: can't be included or excluded on its own (theory data rows, which follow their theory).
+ * [parentExcluded]: its class is excluded, so "(excluded)" isn't worth repeating on it.
  * [rows]: data rows of a theory whose rows are only known once it runs (they share its UID); shown nested under it.
  * [isRow]: this node is one of those rows.
  */
@@ -23,6 +25,7 @@ data class TestNode(
     val locked: Boolean = false,
     val rows: List<TestNode> = emptyList(),
     val isRow: Boolean = false,
+    val parentExcluded: Boolean = false,
 ) {
     /** Rows show just their arguments; everything else shows the full display name. */
     val label: String
@@ -62,7 +65,15 @@ data class TestNode(
     }
 }
 
-data class ClassNode(val project: String, val type: String, val excluded: Boolean, val children: List<TestNode>, val locked: Boolean = false) {
+data class ClassNode(
+    val project: String,
+    val type: String,
+    val excluded: Boolean,
+    val children: List<TestNode>,
+    val locked: Boolean = false,
+    /** Its project is excluded. */
+    val parentExcluded: Boolean = false,
+) {
     val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
     val manualCount: Int get() = children.count { it.manual }
     /** Total run time of the tests below, or null if none has run. */
@@ -119,21 +130,20 @@ object TestTreeModel {
         val projectPaths = (byProject.keys + brokenBuilds + unsupported).toSortedSet()
 
         return projectPaths.mapNotNull { path ->
-            val projectExcluded = rules.any { it.project == path && it.type == null && it.method == null && it.uid == null }
+            val projectExcluded = ExclusionRules.isExcluded(ExclusionRuleDto(path), rules)
             val classes = byProject[path].orEmpty()
                 .groupBy { it.type ?: UNKNOWN_CLASS }
                 .toSortedMap()
                 .map { (type, members) ->
-                    val ownClassRule = type != UNKNOWN_CLASS &&
-                        rules.any { it.project == path && it.type == type && it.method == null && it.uid == null }
-                    val classExcluded = projectExcluded || ownClassRule ||
-                        (type == UNKNOWN_CLASS && members.isNotEmpty() && members.all { isExcluded(it, rules) })
+                    // Tests without a class have no class rule: that row is excluded when all of them are.
+                    val classExcluded = if (type == UNKNOWN_CLASS) members.isNotEmpty() && members.all { isExcluded(it, rules) }
+                    else ExclusionRules.isExcluded(ExclusionRuleDto(path, type), rules)
                     // Data rows of theories whose rows were only known at run time nest under their theory.
                     val keys = members.map { it.key }.toSet()
                     val (rowDtos, topLevel) = members.partition { it.theoryKey != null && it.theoryKey in keys }
                     val rowsByTheory = rowDtos.groupBy { it.theoryKey }
                     fun node(d: TestResultDto, isRow: Boolean = false) =
-                        TestNode(d, projectExcluded || ownClassRule || isExcluded(d, rules), locked = projectExcluded || ownClassRule || isRow, isRow = isRow)
+                        TestNode(d, isExcluded(d, rules), locked = isRow, isRow = isRow, parentExcluded = classExcluded)
                     val nodes = topLevel
                         .sortedWith(compareBy({ it.method ?: it.displayName }, { it.displayName }))
                         .map { d ->
@@ -141,14 +151,14 @@ object TestTreeModel {
                         }
                         .filter { !failuresOnly || it.dto.state == "failed" }
                         .filter { !hideExcluded || !it.excluded }
-                    ClassNode(path, type, classExcluded, nodes, locked = projectExcluded)
+                    ClassNode(path, type, classExcluded, nodes, parentExcluded = projectExcluded)
                 }
                 .filter { !failuresOnly || it.children.isNotEmpty() }
-                .filter { !hideExcluded || (!it.excluded && it.children.isNotEmpty()) }
+                .filter { !hideExcluded || it.children.isNotEmpty() }
             val build = builds[path]
             val buildBroken = build?.status in setOf("failed", "blocked")
             if (failuresOnly && classes.isEmpty() && !buildBroken) return@mapNotNull null
-            if (hideExcluded && (projectExcluded || (classes.isEmpty() && byProject[path].orEmpty().isNotEmpty() && !buildBroken))) return@mapNotNull null
+            if (hideExcluded && classes.isEmpty() && byProject[path].orEmpty().isNotEmpty() && !buildBroken) return@mapNotNull null
             ProjectNode(path, shortName(path), build?.status, build, runs[path], projectExcluded, classes)
         }.sortedBy { it.name }
     }
@@ -183,15 +193,9 @@ object TestTreeModel {
     fun excludedKeys(tests: Collection<TestResultDto>, rules: List<ExclusionRuleDto>): List<String> =
         tests.filter { isExcluded(it, rules) }.map { it.key }
 
-    /** Same matching as the engine's ExclusionSet. */
-    fun isExcluded(t: TestResultDto, rules: List<ExclusionRuleDto>): Boolean = rules.any { r ->
-        r.project == t.project && when {
-            r.uid != null -> r.uid == t.uid
-            r.type == null -> true
-            r.type != t.type -> false
-            else -> r.method == null || r.method == t.method
-        }
-    }
+    /** Same matching as the engine's ExclusionSet: the most specific rule wins, so include rules can override. */
+    fun isExcluded(t: TestResultDto, rules: List<ExclusionRuleDto>): Boolean =
+        ExclusionRules.isExcluded(ExclusionRuleDto(t.project, t.type, t.method, t.uid), rules)
 
     fun ruleFor(t: TestResultDto): ExclusionRuleDto =
         if (t.type != null && t.method != null) ExclusionRuleDto(t.project, t.type, t.method) else ExclusionRuleDto(t.project, uid = t.uid)

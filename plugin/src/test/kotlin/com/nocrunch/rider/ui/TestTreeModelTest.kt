@@ -106,12 +106,24 @@ class TestTreeModelTest {
     }
 
     @Test
-    fun nodes_excluded_by_an_ancestor_are_locked() {
-        val tree = TestTreeModel.build(tests, emptyMap(), listOf(ExclusionRuleDto(unit, "A.Calc")), false)
-        val calc = tree.single { it.path == unit }.children.single { it.type == "A.Calc" }
-        assertFalse(calc.locked, "excluded by its own rule: can be re-included")
-        assertTrue(calc.children.all { it.locked }, "children of an excluded class can't be toggled individually")
-        assertFalse(tree.single { it.path == unit }.children.single { it.type == "A.Other" }.locked)
+    fun tests_inside_an_excluded_class_can_be_toggled_on_their_own() {
+        val rules = listOf(ExclusionRuleDto(unit, "A.Calc"), ExclusionRuleDto(unit, "A.Calc", "Adds", include = true))
+        val calc = TestTreeModel.build(tests, emptyMap(), rules, false).single { it.path == unit }.children.single { it.type == "A.Calc" }
+
+        assertTrue(calc.excluded)
+        assertTrue(calc.children.none { it.locked }, "nothing is locked by its parent any more")
+        assertFalse(calc.children.single { it.dto.method == "Adds" }.excluded, "re-included by its own rule")
+        assertTrue(calc.children.single { it.dto.method == "Subtracts" }.excluded)
+        assertTrue(calc.children.all { it.parentExcluded })
+    }
+
+    @Test
+    fun hide_excluded_keeps_a_test_re_included_inside_an_excluded_project() {
+        val rules = listOf(ExclusionRuleDto(unit), ExclusionRuleDto(unit, "A.Calc", "Adds", include = true))
+        val tree = TestTreeModel.build(tests, emptyMap(), rules, failuresOnly = false, hideExcluded = true)
+
+        val unitNode = tree.single { it.path == unit }
+        assertEquals(listOf("Adds"), unitNode.children.flatMap { c -> c.children.map { it.dto.method } })
     }
 
     @Test

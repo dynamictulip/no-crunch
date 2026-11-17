@@ -25,7 +25,10 @@ sealed interface ViewNode {
     /** Exclusion rules that toggling this row's checkbox adds or removes. */
     val rules: List<ExclusionRuleDto>
     val excluded: Boolean
+    /** Can't be included or excluded on its own (theory data rows). */
     val locked: Boolean
+    /** The row above it is excluded, so "(excluded)" isn't worth repeating. */
+    val parentExcluded: Boolean
 
     val counts: Counts get() = leaves.fold(Counts()) { acc, t -> acc + t.counts }
     val durationMs: Double? get() = leaves.mapNotNull { it.countedDurationMs }.takeIf { it.isNotEmpty() }?.sum()
@@ -41,6 +44,7 @@ data class TestView(val node: TestNode) : ViewNode {
     override val rules get() = listOf(TestTreeModel.ruleFor(node.dto))
     override val excluded get() = node.excluded
     override val locked get() = node.locked
+    override val parentExcluded get() = node.parentExcluded
 }
 
 data class ClassView(val node: ClassNode, override val label: String, val sort: SortMode = SortMode.NAME) : ViewNode {
@@ -49,14 +53,16 @@ data class ClassView(val node: ClassNode, override val label: String, val sort: 
     override val rules get() = node.rules
     override val excluded get() = node.excluded
     override val locked get() = node.locked
+    override val parentExcluded get() = node.parentExcluded
 }
 
 data class GroupView(
     override val label: String,
     val kind: GroupKind,
     val children: List<ViewNode>,
-    override val locked: Boolean,
+    override val parentExcluded: Boolean,
 ) : ViewNode {
+    override val locked get() = false
     override val leaves get() = children.flatMap { it.leaves }
     override val rules get() = children.flatMap { it.rules }.distinct()
     override val excluded get() = children.isNotEmpty() && children.all { it.excluded }
