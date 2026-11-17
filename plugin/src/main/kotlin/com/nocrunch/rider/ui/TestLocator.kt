@@ -1,23 +1,74 @@
 package com.nocrunch.rider.ui
 
-/** Where to put the caret so Rider's test actions see the test method. */
+/** Finds places in a test's source: where its method name is, and where its body starts. */
 object TestLocator {
     private const val LOOKAHEAD_LINES = 15
+
+    private fun lineStarts(text: CharSequence) = buildList { add(0); text.forEachIndexed { i, c -> if (c == '\n') add(i + 1) } }
+
+    private fun lineOf(starts: List<Int>, offset: Int) = starts.indexOfLast { it <= offset }.coerceAtLeast(0)
+
+    /** Offset of the method's name on [line] or the next few lines (the reported line is often an attribute). */
+    private fun nameOffset(text: CharSequence, starts: List<Int>, line: Int, methodName: String?): Int? {
+        if (methodName.isNullOrBlank() || line !in starts.indices) return null
+        val from = starts[line]
+        val to = starts.getOrNull(line + LOOKAHEAD_LINES) ?: text.length
+        return Regex("""\b${Regex.escape(methodName)}\s*[(<]""").find(text.subSequence(from, to))?.let { from + it.range.first }
+    }
 
     /**
      * Frameworks report a test's line as the start of its declaration, which is often an attribute like
      * `[TestMethod]`. Finds the method's name on that line or the next few; otherwise the line's first non-blank.
      */
     fun caretOffset(text: CharSequence, line: Int, methodName: String?): Int {
-        val lineStarts = buildList { add(0); text.forEachIndexed { i, c -> if (c == '\n') add(i + 1) } }
-        if (line !in lineStarts.indices) return 0
-        val from = lineStarts[line]
-        if (!methodName.isNullOrBlank()) {
-            val to = lineStarts.getOrNull(line + LOOKAHEAD_LINES) ?: text.length
-            Regex("""\b${Regex.escape(methodName)}\s*[(<]""").find(text.subSequence(from, to))?.let { return from + it.range.first }
+        val starts = lineStarts(text)
+        if (line !in starts.indices) return 0
+        nameOffset(text, starts, line, methodName)?.let { return it }
+        val from = starts[line]
+        val end = starts.getOrNull(line + 1) ?: text.length
+        return (from until end).firstOrNull { !text[it].isWhitespace() } ?: from
+    }
+
+    /**
+     * The 0-based line of the test's first statement: the first code after the body's `{`, or the expression after
+     * `=>`. Null if the method can't be found.
+     */
+    fun firstBodyLine(text: CharSequence, line: Int, methodName: String?): Int? {
+        val starts = lineStarts(text)
+        var i = nameOffset(text, starts, line, methodName) ?: return null
+        // Skip the parameter list, which can itself contain parentheses (e.g. default values or attributes).
+        var depth = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (c == '(') depth++
+            if (c == ')') { depth--; if (depth == 0) { i++; break } }
+            i++
         }
-        val end = lineStarts.getOrNull(line + 1) ?: text.length
-        val indent = (from until end).firstOrNull { !text[it].isWhitespace() } ?: from
-        return indent
+        while (i < text.length) {
+            if (text[i] == '{') {
+                val code = nextCode(text, i + 1) ?: i
+                return lineOf(starts, if (text[code] == '}') i else code)
+            }
+            if (text[i] == '=' && text.getOrNull(i + 1) == '>') {
+                return lineOf(starts, nextCode(text, i + 2) ?: i)
+            }
+            if (text[i] == ';') return null
+            i++
+        }
+        return null
+    }
+
+    /** Offset of the next code from [from], skipping whitespace and comments (a breakpoint there wouldn't bind). */
+    private fun nextCode(text: CharSequence, from: Int): Int? {
+        var i = from
+        while (i < text.length) {
+            when {
+                text[i].isWhitespace() -> i++
+                text.startsWith("//", i) -> i = text.indexOf('\n', i).let { if (it < 0) text.length else it }
+                text.startsWith("/*", i) -> i = text.indexOf("*/", i + 2).let { if (it < 0) text.length else it + 2 }
+                else -> return i
+            }
+        }
+        return null
     }
 }

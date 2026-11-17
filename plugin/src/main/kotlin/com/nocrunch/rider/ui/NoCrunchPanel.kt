@@ -77,25 +77,52 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private var rebuilding = false
     private var lastModel: List<ProjectNode> = emptyList()
 
-    /** Runs the selected tests now, including excluded ones; results are marked as a manual run. */
-    /** Hands one test to Rider's own test runner to debug (its normal build, not the mirror). */
-    private val debugTestAction: AnAction by lazy {
-        object : AnAction("Debug Test", "Build and debug just this test in Rider", AllIcons.Actions.StartDebugger) {
+    /**
+     * "Break into First Failing Test": the first failing test in the selection (tree order), debugged by name with a
+     * temporary breakpoint on its first line, so the debugger stops as the test starts.
+     */
+    private val breakIntoFailingAction: AnAction by lazy {
+        object : AnAction("Break into First Failing Test", "Debug the first failing test, stopping on its first line",
+            AllIcons.Actions.StartDebugger) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun update(e: AnActionEvent) {
-                val node = singleSelectedTest()
-                e.presentation.isVisible = node != null
-                e.presentation.isEnabled = node != null &&
-                    ((node.dto.type != null && node.dto.method != null) || (node.dto.filePath != null && node.dto.line != null))
+                e.presentation.isVisible = tree.selectionPaths?.isNotEmpty() == true
+                e.presentation.isEnabled = firstFailingSelectedTest() != null
             }
             override fun actionPerformed(e: AnActionEvent) {
-                singleSelectedTest()?.let(::debugTest)
+                val node = firstFailingSelectedTest() ?: return
+                setTemporaryBreakpointAtStart(node)
+                debugTest(node)
             }
         }
     }
 
-    private fun singleSelectedTest(): TestNode? =
-        tree.selectionPaths?.singleOrNull()?.let { (it.lastPathComponent as? CheckedTreeNode)?.userObject as? TestNode }
+    /** The first failing test (current or stale result) under the selected rows, in the order the tree shows them. */
+    private fun firstFailingSelectedTest(): TestNode? {
+        val selected = tree.selectionPaths.orEmpty().sortedBy { tree.getRowForPath(it) }
+        for (path in selected) {
+            val found = TreeUtil.treeNodeTraverser(path.lastPathComponent as CheckedTreeNode).preOrderDfsTraversal()
+                .mapNotNull { (it as? CheckedTreeNode)?.userObject as? TestNode }
+                .firstOrNull { it.shownOutcome == "failed" && it.canDebug }
+            if (found != null) return found
+        }
+        return null
+    }
+
+    private val TestNode.canDebug: Boolean
+        get() = (dto.type != null && dto.method != null) || (dto.filePath != null && dto.line != null)
+
+    /** A breakpoint on the test's first statement that removes itself once hit. Leaves an existing breakpoint alone. */
+    private fun setTemporaryBreakpointAtStart(node: TestNode) {
+        val path = node.dto.filePath ?: return
+        val line = node.dto.line ?: return
+        val file = LocalFileSystem.getInstance().findFileByPath(path) ?: return
+        val document = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(file) ?: return
+        val bodyLine = TestLocator.firstBodyLine(document.charsSequence, line - 1, node.dto.method?.substringBefore('(')) ?: return
+        val manager = com.intellij.xdebugger.XDebuggerManager.getInstance(project).breakpointManager
+        val exists = manager.allBreakpoints.any { it is com.intellij.xdebugger.breakpoints.XLineBreakpoint<*> && it.fileUrl == file.url && it.line == bodyLine }
+        if (!exists) com.intellij.xdebugger.XDebuggerUtil.getInstance().toggleLineBreakpoint(project, file, bodyLine, true)
+    }
 
     /**
      * Debugs the test by name with a run configuration filtered to it. If that isn't possible (no class/method, or
@@ -113,7 +140,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 return
             } catch (e: Throwable) {
                 if (e is com.intellij.openapi.progress.ProcessCanceledException) throw e
-                LOG.warn("Debug Test by name failed for ${d.key}; falling back to Rider's caret-based action", e)
+                LOG.warn("Debug by name failed for ${d.key}; falling back to Rider's caret-based action", e)
             }
         }
         debugInRider(node)
@@ -149,6 +176,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         }
     }
 
+    /** Runs the selected tests now, including excluded ones; results are marked as a manual run. */
     private val runSelectedAction: AnAction by lazy {
         object : AnAction("Run Selected Tests", null, AllIcons.RunConfigurations.TestState.Run) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
@@ -210,7 +238,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         bar.update(ProgressBarModel.from(Counts(), service.state.value, 0))
         // Covers plugin reloads and any case where the startup activity didn't run.
         service.start()
-        PopupHandler.installPopupMenu(tree, DefaultActionGroup(runSelectedAction, debugTestAction, Separator.create(),
+        PopupHandler.installPopupMenu(tree, DefaultActionGroup(runSelectedAction, breakIntoFailingAction, Separator.create(),
             exclusionAction(include = true), exclusionAction(include = false)), "NoCrunchTreePopup")
         val job = service.scope.launch(Dispatchers.EDT) { collect() }
         Disposer.register(parent) { job.cancel() }
