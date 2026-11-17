@@ -64,6 +64,14 @@ cd plugin && JAVA_HOME=~/Applications/Rider.app/Contents/jbr/Contents/Home ./gra
 cd plugin && ./gradlew runIde -PopenSolution="/path/to/Some.slnx"
 ```
 
+While that sandbox Rider is open, apply plugin or engine changes without restarting it:
+
+```bash
+cd plugin && JAVA_HOME=~/Applications/Rider.app/Contents/jbr/Contents/Home ./gradlew prepareSandbox_runIde
+```
+
+The sandbox spots the new build, unloads the old plugin and loads the new one within a few seconds, including a fresh engine. A "still referenced" warning in the sandbox log is a small memory leak per reload; restart the sandbox now and then if it gets sluggish. Changes to `plugin.xml` (new extensions) may still need a restart.
+
 The plugin builds against the Rider installed at `~/Applications/Rider.app`. Set `RIDER_PATH` to use a different install.
 
 The engine can be driven without Rider. Run `dotnet engine/NoCrunch.Engine/bin/Debug/net10.0/NoCrunch.Engine.dll` and speak JSON-RPC 2.0 (`Content-Length` framing) on stdio. Start with `initialize {solutionPath}`. See `engine/NoCrunch.Engine/Protocol/EngineServer.cs` for the protocol.

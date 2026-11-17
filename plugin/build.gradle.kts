@@ -73,6 +73,8 @@ tasks.test {
 // `./gradlew runIde -PopenSolution=/path/to/My.slnx` opens a solution in the sandbox IDE.
 tasks.named<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask>("runIde") {
     providers.gradleProperty("openSolution").orNull?.let { args(listOf(it)) }
-    // Rebuilding while a sandbox IDE is open must not hot-swap the plugin (the unload fails and leaves it half-loaded).
-    jvmArgs("-Didea.auto.reload.plugins=false")
+    // Hot reload: rebuilding (`./gradlew prepareSandbox_runIde`) swaps the plugin into the running sandbox.
+    // runIde pins the plugin into the IDE's module graph (as "required" and via plugin.path), which stops it
+    // being unloaded. It's already installed in the sandbox's plugins folder, so clear both.
+    jvmArgumentProviders.add(CommandLineArgumentProvider { listOf("-Didea.required.plugins.id=", "-Dplugin.path=") })
 }
