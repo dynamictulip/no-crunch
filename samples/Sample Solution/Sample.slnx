@@ -8,5 +8,6 @@
     <Project Path="tests/Shop.Core.Tests/Shop.Core.Tests.csproj" />
     <Project Path="tests/Shop.E2E.Tests/Shop.E2E.Tests.csproj" />
     <Project Path="tests/Shop.Other.Tests/Shop.Other.Tests.csproj" />
+    <Project Path="tests/Shop.Theory.Tests/Shop.Theory.Tests.csproj" />
   </Folder>
 </Solution>
