@@ -11,6 +11,13 @@ enum class ViewMode(val title: String) {
 
 enum class GroupKind { NAMESPACE, FOLDER, FILE }
 
+/** Order of rows at every level of the tree. */
+enum class SortMode(val title: String) {
+    NAME("Name"),
+    STATUS("Status"),
+    DURATION("Run time"),
+}
+
 /** A row below a project. Aggregates (counts, run time, freshness) are computed from the tests underneath. */
 sealed interface ViewNode {
     val label: String
@@ -36,8 +43,8 @@ data class TestView(val node: TestNode) : ViewNode {
     override val locked get() = node.locked
 }
 
-data class ClassView(val node: ClassNode, override val label: String) : ViewNode {
-    val children: List<TestView> get() = node.children.map(::TestView)
+data class ClassView(val node: ClassNode, override val label: String, val sort: SortMode = SortMode.NAME) : ViewNode {
+    val children: List<TestView> get() = TreeView.sortTests(node.children.map(::TestView), sort)
     override val leaves get() = node.children
     override val rules get() = node.rules
     override val excluded get() = node.excluded
@@ -58,10 +65,57 @@ data class GroupView(
 object TreeView {
     const val NO_FILE = "(no file)"
 
-    fun of(project: ProjectNode, mode: ViewMode): List<ViewNode> = when (mode) {
-        ViewMode.CLASSES -> project.children.map { ClassView(it, it.type) }
-        ViewMode.NAMESPACES -> byNamespace(project)
-        ViewMode.FILES -> byFile(project)
+    fun of(project: ProjectNode, mode: ViewMode, sort: SortMode = SortMode.NAME): List<ViewNode> {
+        val nodes = when (mode) {
+            ViewMode.CLASSES -> project.children.map { ClassView(it, it.type) }
+            ViewMode.NAMESPACES -> byNamespace(project)
+            ViewMode.FILES -> byFile(project)
+        }
+        return sortViews(nodes, sort)
+    }
+
+    fun sortProjects(projects: List<ProjectNode>, sort: SortMode): List<ProjectNode> =
+        projects.sortedWith(comparator(sort, { it.name }, { p -> p.children.flatMap { it.children } }, { it.durationMs }))
+
+    fun sortTests(tests: List<TestView>, sort: SortMode): List<TestView> =
+        tests.sortedWith(comparator(sort, { it.label }, { it.leaves }, { it.node.countedDurationMs }))
+
+    /** Sorts rows, and recursively the rows inside groups and classes. */
+    private fun sortViews(nodes: List<ViewNode>, sort: SortMode): List<ViewNode> =
+        nodes.map {
+            when (it) {
+                is GroupView -> it.copy(children = sortViews(it.children, sort))
+                is ClassView -> it.copy(sort = sort)
+                is TestView -> it
+            }
+        }.sortedWith(
+            // Like a file explorer, name order keeps folders first and "(no file)" last.
+            if (sort == SortMode.NAME) compareBy<ViewNode> { kindRank(it) }.then(comparator(sort, { it.label }, { it.leaves }, { it.durationMs }))
+            else comparator(sort, { it.label }, { it.leaves }, { it.durationMs })
+        )
+
+    private fun kindRank(v: ViewNode): Int = when {
+        v is GroupView && v.label == NO_FILE -> 2
+        v is GroupView && v.kind == GroupKind.FOLDER -> 0
+        else -> 1
+    }
+
+    private fun <T> comparator(sort: SortMode, name: (T) -> String, leaves: (T) -> List<TestNode>, duration: (T) -> Double?): Comparator<T> {
+        val byName = compareBy<T, String>(String.CASE_INSENSITIVE_ORDER) { name(it) }
+        return when (sort) {
+            SortMode.NAME -> byName
+            SortMode.STATUS -> compareBy<T> { leaves(it).minOfOrNull(::statusRank) ?: Int.MAX_VALUE }.then(byName)
+            SortMode.DURATION -> compareBy<T> { duration(it) == null }.thenByDescending { duration(it) ?: 0.0 }.then(byName)
+        }
+    }
+
+    /** Lower is worse: failing, failing but stale, not run yet, passing but stale, passing, skipped, excluded. */
+    fun statusRank(t: TestNode): Int = when {
+        t.excluded && !t.manual -> 6
+        t.shownOutcome == "failed" -> if (t.freshness == null) 0 else 1
+        t.shownOutcome == null -> 2
+        t.shownOutcome == "passed" -> if (t.freshness == null) 4 else 3
+        else -> 5
     }
 
     private fun byNamespace(project: ProjectNode): List<ViewNode> {

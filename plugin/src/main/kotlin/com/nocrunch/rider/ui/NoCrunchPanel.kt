@@ -147,9 +147,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         rebuilding = true
         try {
             root.removeAllChildren()
-            for (p in model) {
+            for (p in TreeView.sortProjects(model, sortMode)) {
                 val pn = CheckedTreeNode(p).apply { isChecked = !p.excluded }
-                for (v in TreeView.of(p, viewMode)) pn.add(treeNode(v))
+                for (v in TreeView.of(p, viewMode, sortMode)) pn.add(treeNode(v))
                 root.add(pn)
             }
             (tree.model as DefaultTreeModel).reload()
@@ -163,6 +163,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             rebuilding = false
         }
     }
+
+    private val sortMode: SortMode
+        get() = SortMode.entries.firstOrNull { it.name == settings.state.sortMode } ?: SortMode.NAME
 
     private val viewMode: ViewMode
         get() = ViewMode.entries.firstOrNull { it.name == settings.state.viewMode } ?: ViewMode.CLASSES
@@ -299,6 +302,21 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     override fun setSelected(e: AnActionEvent, state: Boolean) {
                         if (!state) return
                         settings.state.viewMode = mode.name
+                        lastModel = emptyList()
+                        last?.let(::render)
+                    }
+                })
+            }
+        })
+        add(DefaultActionGroup("Sort By", true).apply {
+            templatePresentation.icon = AllIcons.ObjectBrowser.Sorted
+            SortMode.entries.forEach { mode ->
+                add(object : ToggleAction(mode.title) {
+                    override fun getActionUpdateThread() = ActionUpdateThread.EDT
+                    override fun isSelected(e: AnActionEvent) = sortMode == mode
+                    override fun setSelected(e: AnActionEvent, state: Boolean) {
+                        if (!state) return
+                        settings.state.sortMode = mode.name
                         lastModel = emptyList()
                         last?.let(::render)
                     }

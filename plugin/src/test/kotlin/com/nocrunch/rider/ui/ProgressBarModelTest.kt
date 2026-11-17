@@ -28,7 +28,13 @@ class ProgressBarModelTest {
     fun in_progress_without_failures_is_blue() {
         assertEquals(BarColour.RUNNING, bar(3, 0, 1, state = "testing", queued = 1).colour)
         assertEquals(BarColour.RUNNING, bar(4, 0, 0, state = "building", queued = 2).colour)
-        assertEquals(BarColour.RUNNING, bar(2, 0, 2).colour, "stale results still to rerun")
+    }
+
+    @Test
+    fun idle_with_no_failures_is_green_even_with_pending_tests() {
+        val b = bar(2039, 0, 7)
+        assertEquals(BarColour.PASSING, b.colour)
+        assertEquals("Idle   ✔ 2039  ✖ 0  ○ 7", b.text)
     }
 
     @Test
