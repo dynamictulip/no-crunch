@@ -17,6 +17,8 @@ class NoCrunchSettingsState : BaseState() {
     var dotnetPath by string("")
     /** Tool window: hide excluded projects, classes and tests. */
     var hideExcluded by property(false)
+    /** Tool window grouping: a [com.nocrunch.rider.ui.ViewMode] name. */
+    var viewMode by string(com.nocrunch.rider.ui.ViewMode.CLASSES.name)
 }
 
 @Service(Service.Level.PROJECT)

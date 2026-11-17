@@ -83,7 +83,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 if (rebuilding) return
                 val rules = when (val o = node.userObject) {
                     is ProjectNode -> listOf(o.rule)
-                    is ClassNode -> o.rules
+                    is ViewNode -> o.rules
                     is TestNode -> listOf(TestTreeModel.ruleFor(o.dto))
                     else -> return
                 }
@@ -149,11 +149,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             root.removeAllChildren()
             for (p in model) {
                 val pn = CheckedTreeNode(p).apply { isChecked = !p.excluded }
-                for (c in p.children) {
-                    val cn = CheckedTreeNode(c).apply { isChecked = !c.excluded; isEnabled = !c.locked }
-                    for (t in c.children) cn.add(CheckedTreeNode(t).apply { isChecked = !t.excluded; isEnabled = !t.locked })
-                    pn.add(cn)
-                }
+                for (v in TreeView.of(p, viewMode)) pn.add(treeNode(v))
                 root.add(pn)
             }
             (tree.model as DefaultTreeModel).reload()
@@ -168,12 +164,29 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         }
     }
 
+    private val viewMode: ViewMode
+        get() = ViewMode.entries.firstOrNull { it.name == settings.state.viewMode } ?: ViewMode.CLASSES
+
+    /** Tests keep their [TestNode] as the row object; classes and groups use their [ViewNode]. */
+    private fun treeNode(v: ViewNode): CheckedTreeNode = when (v) {
+        is TestView -> CheckedTreeNode(v.node).apply { isChecked = !v.excluded; isEnabled = !v.locked }
+        is ClassView -> CheckedTreeNode(v).apply {
+            isChecked = !v.excluded; isEnabled = !v.locked
+            v.children.forEach { add(treeNode(it)) }
+        }
+        is GroupView -> CheckedTreeNode(v).apply {
+            isChecked = !v.excluded; isEnabled = !v.locked
+            v.children.forEach { add(treeNode(it)) }
+        }
+    }
+
     private fun barState(s: Snapshot): BarState = ProgressBarModel.forService(s.tests, s.builds, s.runs, s.rules, s.state)
 
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
         when (val o = (it as? CheckedTreeNode)?.userObject) {
             is ProjectNode -> o.path
-            is ClassNode -> o.type
+            is ClassView -> o.node.type
+            is GroupView -> "${o.kind}:${o.label}"
             is TestNode -> o.dto.key
             else -> "root"
         }
@@ -217,6 +230,16 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 }
                 details.show(text, b?.status == "failed" || o.run?.error != null)
             }
+            is ViewNode -> {
+                val text = buildString {
+                    append(o.label).append('\n')
+                    append(o.counts.label())
+                    o.durationMs?.let { append("   ").append(TestTreeModel.formatDuration(it)) }
+                    o.freshness?.let { append("   (").append(it).append(")") }
+                    append('\n')
+                }
+                details.show(text, o.counts.failed > 0)
+            }
             else -> details.clear()
         }
     }
@@ -232,7 +255,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         return paths.flatMap { p ->
             when (val o = (p.lastPathComponent as CheckedTreeNode).userObject) {
                 is TestNode -> listOf(o.dto.key)
-                is ClassNode -> o.children.map { it.dto.key }
+                is ViewNode -> o.leaves.map { it.dto.key }
                 is ProjectNode -> o.children.flatMap { c -> c.children.map { it.dto.key } }
                 else -> emptyList()
             }
@@ -265,6 +288,21 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 failuresOnly = state
                 lastModel = emptyList()
                 last?.let(::render)
+            }
+        })
+        add(DefaultActionGroup("View As", true).apply {
+            templatePresentation.icon = AllIcons.Actions.GroupBy
+            ViewMode.entries.forEach { mode ->
+                add(object : ToggleAction(mode.title) {
+                    override fun getActionUpdateThread() = ActionUpdateThread.EDT
+                    override fun isSelected(e: AnActionEvent) = viewMode == mode
+                    override fun setSelected(e: AnActionEvent, state: Boolean) {
+                        if (!state) return
+                        settings.state.viewMode = mode.name
+                        lastModel = emptyList()
+                        last?.let(::render)
+                    }
+                })
             }
         })
         add(object : ToggleAction("Hide Excluded Tests", null, AllIcons.Actions.ToggleVisibility) {
@@ -325,9 +363,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         o.run?.status == "crashed" -> r.append("  test host crashed", SimpleTextAttributes.ERROR_ATTRIBUTES)
                     }
                 }
-                is ClassNode -> {
+                is ViewNode -> {
                     r.icon = outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
-                    r.append(o.type, when {
+                    r.append(o.label, when {
                         o.excluded && o.manualCount == 0 -> SimpleTextAttributes.GRAYED_ATTRIBUTES
                         o.shownOutcome == "failed" -> if (o.isFresh) FAILED else STALE_FAILED
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
