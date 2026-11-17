@@ -27,17 +27,21 @@ enum class NameColouring(val title: String) {
             return pieces.map { (text, isWord) -> text to if (isWord) next++ % COLOURS else null }
         }
 
-        /** PascalCase words: a new word starts at a capital after a lower-case letter or digit, at the last capital
-         *  of an acronym followed by lower case (`HTTPResponse` → `HTTP`, `Response`), and where digits begin. */
+        /**
+         * PascalCase words. A new word starts at a capital after a lower-case letter, at a capital followed by lower
+         * case after a capital or digit (`HTTPResponse` → `HTTP`, `Response`), and at digits after a lower-case
+         * letter (`Returns404`). Digits after a capital stay with it, so acronyms like `E2E` and `HTTP2` are one word.
+         */
         private fun words(s: String): List<String> {
             val out = mutableListOf<String>()
             var start = 0
             for (i in 1 until s.length) {
                 val prev = s[i - 1]
                 val c = s[i]
-                val boundary = (c.isUpperCase() && (prev.isLowerCase() || prev.isDigit())) ||
-                    (c.isUpperCase() && prev.isUpperCase() && i + 1 < s.length && s[i + 1].isLowerCase()) ||
-                    (c.isDigit() && !prev.isDigit())
+                val nextLower = i + 1 < s.length && s[i + 1].isLowerCase()
+                val boundary = (c.isUpperCase() && prev.isLowerCase()) ||
+                    (c.isUpperCase() && (prev.isUpperCase() || prev.isDigit()) && nextLower) ||
+                    (c.isDigit() && prev.isLowerCase())
                 if (boundary) { out += s.substring(start, i); start = i }
             }
             out += s.substring(start)

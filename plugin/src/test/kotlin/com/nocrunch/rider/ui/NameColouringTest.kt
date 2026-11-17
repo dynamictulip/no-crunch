@@ -59,4 +59,12 @@ class NameColouringTest {
         assertEquals("Shop:0 .:- Catalog:1 .:- Tests:2", show("Shop.Catalog.Tests", NameColouring.SNAKE))
         assertEquals("Pricing:0 /:- Rules:1 /:- Bulk:2 Discount:0", show("Pricing/Rules/BulkDiscount", NameColouring.PASCAL))
     }
+
+    @Test
+    fun digits_inside_an_acronym_stay_with_it() {
+        assertEquals("Shop:0 .:- E2E:1 .:- Tests:2", show("Shop.E2E.Tests", NameColouring.PASCAL))
+        assertEquals("E2E:0 Checkout:1 Tests:2", show("E2ECheckoutTests", NameColouring.PASCAL))
+        assertEquals("HTTP2:0 Request:1", show("HTTP2Request", NameColouring.PASCAL))
+        assertEquals("Get:0 2:1 Items:2", show("Get2Items", NameColouring.PASCAL))
+    }
 }
