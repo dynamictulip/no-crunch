@@ -99,7 +99,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     /**
      * Rider's "Debug" context action works out which test to debug from the editor caret, so open the test's file,
-     * put the caret on its first line, and run that action on the editor.
+     * put the caret on the test method's name, and run that action on the editor. The action is answered by Rider's
+     * backend, which needs a moment to see the newly opened editor and caret, so keep trying for a few seconds.
      */
     private fun debugInRider(node: TestNode) {
         val path = node.dto.filePath ?: return
@@ -108,20 +109,21 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         val file = LocalFileSystem.getInstance().findFileByPath(path) ?: return
         val editor = com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project)
             .openTextEditor(OpenFileDescriptor(project, file, maxOf(0, line), 0), true) ?: return
-        val doc = editor.document
-        if (line in 0 until doc.lineCount) {
-            val start = doc.getLineStartOffset(line)
-            val text = doc.charsSequence.subSequence(start, doc.getLineEndOffset(line))
-            editor.caretModel.moveToOffset(start + text.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0))
-        }
-        // Give Rider's backend a moment to see the caret move before asking it which test is there.
+        val methodName = node.dto.method?.substringBefore('(')
+        editor.caretModel.moveToOffset(TestLocator.caretOffset(editor.document.charsSequence, line, methodName))
+
         service.scope.launch(Dispatchers.EDT) {
-            kotlinx.coroutines.delay(300)
-            ActionManager.getInstance().tryToExecute(action, null, editor.contentComponent, "NoCrunchTreePopup", true)
-                .doWhenRejected { _: String? ->
-                    com.intellij.codeInsight.hint.HintManager.getInstance()
-                        .showErrorHint(editor, "Rider couldn't find a test to debug here")
+            repeat(DEBUG_ATTEMPTS) { attempt ->
+                kotlinx.coroutines.delay(DEBUG_RETRY_MS)
+                val accepted = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                    ActionManager.getInstance().tryToExecute(action, null, editor.contentComponent, "NoCrunchTreePopup", true)
+                        .doWhenDone(Runnable { if (cont.isActive) cont.resumeWith(Result.success(true)) })
+                        .doWhenRejected(Runnable { if (cont.isActive) cont.resumeWith(Result.success(false)) })
                 }
+                LOG.info("Debug Test ${node.dto.key}: attempt ${attempt + 1} ${if (accepted) "accepted" else "rejected"}")
+                if (accepted) return@launch
+            }
+            com.intellij.codeInsight.hint.HintManager.getInstance().showErrorHint(editor, "Rider couldn't find a test to debug here")
         }
     }
 
@@ -504,6 +506,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         const val PAUSED_CARD = "paused"
         /** Rider's editor context action that debugs the test(s) at the caret. */
         const val RIDER_DEBUG_TEST_ACTION = "RiderUnitTestDebugContextAction"
+        const val DEBUG_ATTEMPTS = 12
+        const val DEBUG_RETRY_MS = 250L
+        val LOG = com.intellij.openapi.diagnostic.logger<NoCrunchPanel>()
 
         /** The run-all icon with a small "+" badge: run everything, plus the excluded tests. */
         val RUN_ALL_INCLUDING_EXCLUDED: Icon = com.intellij.ui.LayeredIcon(2).apply {
