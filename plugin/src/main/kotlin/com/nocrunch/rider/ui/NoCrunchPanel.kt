@@ -360,47 +360,42 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         when (val o = node?.userObject) {
             is TestNode -> {
                 val d = o.dto
-                val text = buildString {
-                    append(d.displayName).append(" — ")
+                details.show {
+                    normal(d.displayName).normal(" — ")
                     when {
-                        o.freshness == null -> append(d.state)
-                        o.shownOutcome != null -> append("last result: ").append(o.shownOutcome).append(" (").append(o.freshness)
-                            .append(if (o.freshness == "stale") " — the code changed since this ran" else "").append(")")
-                        else -> append(d.state)
+                        o.freshness == null -> status(d.state, d.state == "failed")
+                        o.shownOutcome != null -> normal("last result: ").status(o.shownOutcome!!, o.shownOutcome == "failed")
+                            .normal(" (").normal(o.freshness!!).normal(if (o.freshness == "stale") " — the code changed since this ran" else "").normal(")")
+                        else -> normal(d.state)
                     }
-                    d.durationMs?.let { append(" (${"%.0f".format(it)} ms)") }
-                    append('\n')
-                    append(if (o.manual) "Result from a manual run" else "Result from an automatic run")
-                    if (o.excluded) append(" (excluded from automatic runs)")
-                    append('\n')
-                    d.message?.let { append('\n').append(it).append('\n') }
-                    d.stackTrace?.let { append('\n').append(it).append('\n') }
+                    d.durationMs?.let { normal(" (${"%.0f".format(it)} ms)") }
+                    normal("\n")
+                    muted(if (o.manual) "Result from a manual run" else "Result from an automatic run")
+                    if (o.excluded) muted(" (excluded from automatic runs)")
+                    normal("\n")
+                    d.message?.let { normal("\n").normal(it).normal("\n") }
+                    d.stackTrace?.let { normal("\n").normal(it).normal("\n") }
                 }
-                details.show(text, d.state == "failed")
             }
             is ProjectNode -> {
                 val b = o.build
-                val text = buildString {
-                    append(o.path).append('\n')
+                details.show {
+                    normal(o.path).normal("\n")
                     if (b != null) {
-                        append("Build: ").append(b.status)
-                        b.blockedBy?.let { append(" (blocked by $it)") }
-                        append('\n')
-                        if (b.output.isNotBlank()) append('\n').append(b.output).append('\n')
+                        normal("Build: ").status(b.status, b.status == "failed")
+                        b.blockedBy?.let { normal(" (blocked by $it)") }
+                        normal("\n")
+                        if (b.output.isNotBlank()) normal("\n").normal(b.output).normal("\n")
                     }
-                    o.run?.error?.let { append("\nRun: ").append(o.run.status).append(" — ").append(it).append('\n') }
+                    o.run?.error?.let { normal("\nRun: ").red(o.run.status).normal(" — ").normal(it).normal("\n") }
                 }
-                details.show(text, b?.status == "failed" || o.run?.error != null)
             }
-            is ViewNode -> {
-                val text = buildString {
-                    append(o.label).append('\n')
-                    append(o.counts.label())
-                    o.durationMs?.let { append("   ").append(TestTreeModel.formatDuration(it)) }
-                    o.freshness?.let { append("   (").append(it).append(")") }
-                    append('\n')
-                }
-                details.show(text, o.counts.failed > 0)
+            is ViewNode -> details.show {
+                normal(o.label).normal("\n")
+                normal("✔ ${o.counts.passed}  ").status("✖ ${o.counts.failed}", o.counts.failed > 0).normal("  ○ ${o.counts.pending}")
+                o.durationMs?.let { normal("   ").normal(TestTreeModel.formatDuration(it)) }
+                o.freshness?.let { normal("   (").normal(it).normal(")") }
+                normal("\n")
             }
             else -> details.clear()
         }

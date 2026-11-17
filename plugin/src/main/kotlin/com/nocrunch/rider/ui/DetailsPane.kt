@@ -20,9 +20,26 @@ class DetailsPane(private val project: Project, parent: Disposable) {
 
     val component: JComponent get() = console.component
 
-    fun show(text: String, isError: Boolean) {
+    /** Shows text built with [Text]: normal, with only the failure words in red and side notes in grey. */
+    fun show(build: Text.() -> Unit) {
         console.clear()
-        console.print(text, if (isError) ConsoleViewContentType.ERROR_OUTPUT else ConsoleViewContentType.NORMAL_OUTPUT)
+        Text().apply(build).parts.forEach { (text, type) -> console.print(text, type) }
+    }
+
+    class Text {
+        internal val parts = mutableListOf<Pair<String, ConsoleViewContentType>>()
+        fun normal(s: String) = apply { parts += s to ConsoleViewContentType.NORMAL_OUTPUT }
+        fun red(s: String) = apply { parts += s to ConsoleViewContentType.ERROR_OUTPUT }
+        fun muted(s: String) = apply { parts += s to MUTED }
+        /** [s] in red if [failed], otherwise normal. */
+        fun status(s: String, failed: Boolean) = if (failed) red(s) else normal(s)
+    }
+
+    private companion object {
+        val MUTED = ConsoleViewContentType(
+            "NoCrunchMuted",
+            com.intellij.openapi.editor.markup.TextAttributes().apply { foregroundColor = com.intellij.ui.JBColor.GRAY },
+        )
     }
 
     fun clear() = console.clear()
