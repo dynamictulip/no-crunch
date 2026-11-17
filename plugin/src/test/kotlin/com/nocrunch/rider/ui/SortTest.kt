@@ -29,19 +29,19 @@ class SortTest {
     private val rules = listOf(ExclusionRuleDto(a, "N.Zeta", "Excluded"))
     private fun projects() = TestTreeModel.build(tests, emptyMap(), rules, false)
     private fun testOrder(sort: SortMode) =
-        (TreeView.of(projects().single { it.path == a }, ViewMode.CLASSES, sort).single { it.label == "N.Zeta" } as ClassView)
+        (TreeView.of(projects().single { it.path == a }, ViewMode.CLASSES, sort).single { it.label == "Zeta" } as ClassView)
             .let { TreeView.sortTests(it.children, sort) }.map { it.node.dto.method }
 
     @Test
     fun name_sort_is_alphabetical_ignoring_case() {
-        assertEquals(listOf("N.alpha", "N.Zeta"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.NAME).map { it.label })
+        assertEquals(listOf("alpha", "Zeta"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.NAME).map { it.label })
         assertEquals(listOf("Excluded", "fail", "pass_fast", "queued", "stale_pass"), testOrder(SortMode.NAME))
     }
 
     @Test
     fun status_sort_puts_problems_first() {
         assertEquals(listOf("fail", "queued", "stale_pass", "pass_fast", "Excluded"), testOrder(SortMode.STATUS))
-        assertEquals(listOf("N.Zeta", "N.alpha"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.STATUS).map { it.label })
+        assertEquals(listOf("Zeta", "alpha"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.STATUS).map { it.label })
         assertEquals(listOf(a, b), TreeView.sortProjects(projects(), SortMode.STATUS).map { it.path })
     }
 
@@ -61,7 +61,7 @@ class SortTest {
     @Test
     fun run_time_sort_is_slowest_first_with_unrun_last() {
         assertEquals(listOf("stale_pass", "fail", "pass_fast", "Excluded", "queued"), testOrder(SortMode.DURATION))
-        assertEquals(listOf("N.alpha", "N.Zeta"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.DURATION).map { it.label })
+        assertEquals(listOf("alpha", "Zeta"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.DURATION).map { it.label })
         assertEquals(listOf(a, b), TreeView.sortProjects(projects(), SortMode.DURATION).map { it.path })
     }
 }

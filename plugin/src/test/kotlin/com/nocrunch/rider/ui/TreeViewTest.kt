@@ -30,7 +30,7 @@ class TreeViewTest {
     @Test
     fun classes_view_is_classes_with_full_names() {
         val view = TreeView.of(project(), ViewMode.CLASSES)
-        assertEquals(listOf("Shop.Unit.OtherTests", "Shop.Unit.Pricing.CalcTests", "Shop.Unit.Pricing.TaxTests"), labels(view))
+        assertEquals(listOf("OtherTests", "Pricing.CalcTests", "Pricing.TaxTests"), labels(view))
         assertTrue(view.all { it is ClassView })
     }
 

@@ -73,7 +73,10 @@ object TreeView {
 
     fun of(project: ProjectNode, mode: ViewMode, sort: SortMode = SortMode.NAME): List<ViewNode> {
         val nodes = when (mode) {
-            ViewMode.CLASSES -> project.children.map { ClassView(it, it.type) }
+            ViewMode.CLASSES -> {
+                val prefix = sharedNamespace(project.children.map { it.type })
+                project.children.map { ClassView(it, it.type.removePrefix(prefix)) }
+            }
             ViewMode.NAMESPACES -> byNamespace(project)
             ViewMode.FILES -> byFile(project)
         }
@@ -136,6 +139,17 @@ object TreeView {
         t.shownOutcome == null -> 2
         t.shownOutcome == "passed" -> if (t.freshness == null) 4 else 3
         else -> 5
+    }
+
+    /**
+     * Classes view drops the namespace every class in the project shares, so `Shop.Unit.OtherTests` and
+     * `Shop.Unit.Pricing.CalcTests` show as `OtherTests` and `Pricing.CalcTests`. Returns it with its trailing dot.
+     */
+    fun sharedNamespace(types: List<String>): String {
+        val namespaces = types.filter { it.contains('.') && it != TestTreeModel.UNKNOWN_CLASS }.map { it.substringBeforeLast('.').split('.') }
+        if (namespaces.isEmpty() || namespaces.size < types.size) return ""
+        val common = namespaces.reduce { acc, ns -> acc.zip(ns).takeWhile { (a, b) -> a == b }.map { it.first } }
+        return if (common.isEmpty()) "" else common.joinToString(".") + "."
     }
 
     /**
