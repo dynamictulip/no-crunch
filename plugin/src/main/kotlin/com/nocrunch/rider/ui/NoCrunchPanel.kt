@@ -48,7 +48,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     // No automatic parent/child propagation: each click maps to exactly one change in the exclusion rules.
     /** Checkboxes only show while choosing which tests run automatically (ticked = runs). */
     private var choosingTests = false
-    private val tree = CheckboxTree(Renderer({ choosingTests }, { nameColouring }), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
+    /** Some test shown in the tree is failing (used to drop the green tick highlights). */
+    private val anyFailures: Boolean get() = lastModel.any { it.counts.failed > 0 }
+    private val tree = CheckboxTree(Renderer({ choosingTests }, { nameColouring }, { anyFailures }), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
     private val details = DetailsPane(project, parent)
     private val bar = ProgressBar()
     private val cards = JPanel(java.awt.CardLayout())
@@ -601,9 +603,30 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         override fun actionPerformed(e: AnActionEvent) = action()
     }
 
-    private class Renderer(private val showCheckboxes: () -> Boolean, private val colouring: () -> NameColouring) : CheckboxTree.CheckboxTreeCellRenderer() {
+    private class Renderer(
+        private val showCheckboxes: () -> Boolean,
+        private val colouring: () -> NameColouring,
+        /** Some test in the tree is failing: then only the red crosses are highlighted, not the green ticks. */
+        private val anyFailures: () -> Boolean,
+    ) : CheckboxTree.CheckboxTreeCellRenderer() {
+        /** Counts, run times and notes after the name, in the normal UI font (the name is monospace). */
+        private val stats = com.intellij.ui.SimpleColoredComponent().apply {
+            isOpaque = false
+            // The new UI draws the selected row as a rounded box inset from the tree's right edge; end inside it.
+            ipad = com.intellij.util.ui.JBUI.insetsRight(14)
+        }
+
+        init {
+            // The base renderer lays out checkbox and text with a BorderLayout; if that ever changes, stats go in the text.
+            if (layout is BorderLayout) add(stats, BorderLayout.EAST)
+        }
+
+        private val out: com.intellij.ui.SimpleColoredComponent get() = if (stats.parent == this) stats else textRenderer
+
         override fun customizeRenderer(tree: JTree, value: Any, selected: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean) {
             val r = textRenderer
+            stats.clear()
+            stats.font = tree.font
             val editing = showCheckboxes()
             val obj = (value as? CheckedTreeNode)?.userObject
             // The editor's monospace font, so names read like code and data-row columns line up.
@@ -616,7 +639,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 is BuildErrorsGroup -> {
                     r.icon = AllIcons.General.Error
                     r.append("Build errors", FAILED_BOLD)
-                    r.append("  ${o.count}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    out.append("  ${o.count}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                 }
                 is ProjectNode -> {
                     r.icon = when (o.buildStatus) {
@@ -637,12 +660,12 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         appendManual(o.manualCount)
                     }
                     when {
-                        o.excluded -> r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.buildStatus == "failed" -> r.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
-                        o.buildStatus == "blocked" -> r.append("  blocked by ${o.blockedByName ?: "build failure"}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.run?.status == "unsupportedNotMtp" -> r.append("  unsupported (VSTest)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.run?.status == "unsupportedMtpVersion" -> r.append("  unsupported MTP version", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.run?.status == "crashed" -> r.append("  test host crashed", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                        o.excluded -> out.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.buildStatus == "failed" -> out.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                        o.buildStatus == "blocked" -> out.append("  blocked by ${o.blockedByName ?: "build failure"}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.run?.status == "unsupportedNotMtp" -> out.append("  unsupported (VSTest)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.run?.status == "unsupportedMtpVersion" -> out.append("  unsupported MTP version", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.run?.status == "crashed" -> out.append("  test host crashed", SimpleTextAttributes.ERROR_ATTRIBUTES)
                     }
                 }
                 is ViewNode -> {
@@ -657,7 +680,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     appendFreshness(o.freshness)
                     appendManual(o.manualCount)
                     // Without checkboxes, say which rows are left out of automatic runs.
-                    if (o.excluded && !o.parentExcluded && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                    if (o.excluded && !o.parentExcluded && !editing) out.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
                 is TestNode -> {
                     val d = o.dto
@@ -676,8 +699,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
                     appendFreshness(o.freshness)
                     // A theory's rows share its run, so only the theory says it was a manual run.
-                    if (o.manual && !o.isRow) r.append("  ▸ manual run", MANUAL)
-                    else if (o.excluded && !o.parentExcluded && !o.isRow && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                    if (o.manual && !o.isRow) out.append("  ▸ manual run", MANUAL)
+                    else if (o.excluded && !o.parentExcluded && !o.isRow && !editing) out.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
             }
         }
@@ -691,7 +714,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             val style = if (bold) SimpleTextAttributes.STYLE_BOLD else SimpleTextAttributes.STYLE_PLAIN
             val mode = colouring().let { if (parent && it != NameColouring.OFF) NameColouring.PASCAL else it }
             NameColouring.split(name, mode).forEach { (text, colour) ->
-                textRenderer.append(text, SimpleTextAttributes(style, colour?.let { NAME_PARTS[it] }))
+                textRenderer.append(text, SimpleTextAttributes(style, colour?.let { ThemeColours.nameParts()[it] }))
             }
         }
 
@@ -704,31 +727,32 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         private fun appendArgs(text: String) {
             if (colouring() == NameColouring.OFF) { textRenderer.append(text, SimpleTextAttributes.REGULAR_ATTRIBUTES); return }
             NameColouring.splitArgs(text).forEach { (t, colour) ->
-                textRenderer.append(t, colour?.let { SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, NAME_PARTS[it]) } ?: SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                textRenderer.append(t, colour?.let { SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, ThemeColours.nameParts()[it]) } ?: SimpleTextAttributes.REGULAR_ATTRIBUTES)
             }
         }
 
         private companion object {
             val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, com.intellij.ui.JBColor.RED)
             val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, com.intellij.ui.JBColor.RED)
-            val MANUAL = SimpleTextAttributes(SimpleTextAttributes.STYLE_ITALIC, com.intellij.ui.JBColor.BLUE)
+            val PASSED_BOLD = SimpleTextAttributes(
+                SimpleTextAttributes.STYLE_BOLD,
+                com.intellij.ui.JBColor(java.awt.Color(0x3C, 0x8A, 0x3F), java.awt.Color(0x5F, 0xB8, 0x65)),
+            )
+                        val MANUAL = SimpleTextAttributes(SimpleTextAttributes.STYLE_ITALIC, com.intellij.ui.JBColor.BLUE)
             /** Muted red for failures from an earlier run (stale, queued or running again). */
             private val STALE_RED = com.intellij.ui.JBColor(java.awt.Color(0xC9, 0x8A, 0x8A), java.awt.Color(0x8C, 0x55, 0x55))
             val STALE_FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, STALE_RED)
             val STALE_FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, STALE_RED)
-            /** Colour-coded name parts: blue, purple, teal (light theme, dark theme). */
-            val NAME_PARTS = listOf(
-                com.intellij.ui.JBColor(java.awt.Color(0x2F, 0x6F, 0xC9), java.awt.Color(0x6A, 0xA7, 0xF8)),
-                com.intellij.ui.JBColor(java.awt.Color(0x9A, 0x4F, 0x8E), java.awt.Color(0xC7, 0x7D, 0xBB)),
-                com.intellij.ui.JBColor(java.awt.Color(0x24, 0x87, 0x74), java.awt.Color(0x5F, 0xB8, 0xA6)),
-            )
         }
 
         private fun appendCounts(c: Counts, excluded: Boolean) {
             val r = textRenderer
-            r.append("   ✔ ${c.passed}  ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-            r.append("✖ ${c.failed}", if (c.failed > 0 && !excluded) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
-            r.append("  ○ ${c.pending}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            // Highlight the cross when something fails, otherwise the tick when something passed.
+            val allPassed = c.failed == 0 && c.passed > 0 && !excluded && !anyFailures()
+            out.append("   ✔ ${c.passed}", if (allPassed) PASSED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            out.append("  ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            out.append("✖ ${c.failed}", if (c.failed > 0 && !excluded) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            out.append("  ○ ${c.pending}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
         }
 
         /** Outcome icon, faded when the result is from an earlier run (stale/queued/running). */
@@ -743,7 +767,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         }
 
         private fun appendDuration(ms: Double?) {
-            if (ms != null) textRenderer.append("  ${TestTreeModel.formatDuration(ms)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            if (ms != null) out.append("  ${TestTreeModel.formatDuration(ms)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
         }
 
         private fun appendFreshness(freshness: String?) {
@@ -752,11 +776,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 "running" -> "running…"
                 else -> freshness
             }
-            textRenderer.append("  $text", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+            out.append("  $text", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
         }
 
         private fun appendManual(n: Int) {
-            if (n > 0) textRenderer.append("  ▸ $n manual", MANUAL)
+            if (n > 0) out.append("  ▸ $n manual", MANUAL)
         }
 
         private fun stateIcon(c: Counts): Icon = when {
