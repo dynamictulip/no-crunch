@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.actionSystem.ToggleAction
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -115,7 +116,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         bar.update(ProgressBarModel.from(Counts(), service.state.value, 0))
         // Covers plugin reloads and any case where the startup activity didn't run.
         service.start()
-        PopupHandler.installPopupMenu(tree, DefaultActionGroup(runSelectedAction), "NoCrunchTreePopup")
+        PopupHandler.installPopupMenu(tree, DefaultActionGroup(runSelectedAction, Separator.create(),
+            exclusionAction(include = true), exclusionAction(include = false)), "NoCrunchTreePopup")
         val job = service.scope.launch(Dispatchers.EDT) { collect() }
         Disposer.register(parent) { job.cancel() }
     }
@@ -266,6 +268,30 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         }.distinct()
     }
+
+    /** Selected rows that can be included/excluded on their own (not locked by an excluded parent), with their rules. */
+    private fun selectedExclusionTargets(): List<Pair<Boolean, List<com.nocrunch.rider.engine.ExclusionRuleDto>>> =
+        tree.selectionPaths.orEmpty().mapNotNull { p ->
+            when (val o = (p.lastPathComponent as? CheckedTreeNode)?.userObject) {
+                is ProjectNode -> o.excluded to listOf(o.rule)
+                is ViewNode -> if (o.locked) null else o.excluded to o.rules
+                is TestNode -> if (o.locked) null else o.excluded to listOf(TestTreeModel.ruleFor(o.dto))
+                else -> null
+            }
+        }
+
+    /** Right-click "Include in / Exclude from Automatic Runs"; shown only when it would change something. */
+    private fun exclusionAction(include: Boolean) =
+        object : AnAction(if (include) "Include in Automatic Runs" else "Exclude from Automatic Runs") {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabledAndVisible = selectedExclusionTargets().any { (excluded, _) -> excluded == include }
+            }
+            override fun actionPerformed(e: AnActionEvent) {
+                val rules = selectedExclusionTargets().filter { (excluded, _) -> excluded == include }.flatMap { it.second }
+                if (rules.isNotEmpty()) service.setExcluded(rules, excluded = !include)
+            }
+        }
 
     private fun toolbarActions() = DefaultActionGroup().apply {
         add(object : AnAction() {
