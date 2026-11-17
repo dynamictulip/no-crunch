@@ -1,0 +1,49 @@
+package com.nocrunch.rider.ui
+
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Test
+
+class NameColouringTest {
+    private fun show(name: String, mode: NameColouring) =
+        NameColouring.split(name, mode).joinToString(" ") { (text, colour) -> "$text:${colour ?: "-"}" }
+
+    @Test
+    fun off_leaves_the_name_whole() =
+        assertEquals("Total_includes_tax:-", show("Total_includes_tax", NameColouring.OFF))
+
+    @Test
+    fun snake_case_cycles_three_colours_and_leaves_underscores_plain() =
+        assertEquals(
+            "rounds:0 _:- half:1 _:- up:2 _:- to:0 _:- pence:1",
+            show("rounds_half_up_to_pence", NameColouring.SNAKE),
+        )
+
+    @Test
+    fun snake_case_with_no_underscores_is_one_part() =
+        assertEquals("TotalIncludesTax:0", show("TotalIncludesTax", NameColouring.SNAKE))
+
+    @Test
+    fun pascal_case_cycles_three_colours_per_word() =
+        assertEquals(
+            "Rounds:0 Half:1 Up:2 To:0 Pence:1",
+            show("RoundsHalfUpToPence", NameColouring.PASCAL),
+        )
+
+    @Test
+    fun pascal_case_keeps_acronyms_and_digits_together() =
+        assertEquals(
+            "Get:0 HTTP:1 Response:2 Returns:0 404:1",
+            show("GetHTTPResponseReturns404", NameColouring.PASCAL),
+        )
+
+    @Test
+    fun pascal_case_also_breaks_on_underscores() =
+        assertEquals(
+            "Total:0 _:- When:1 Empty:2 _:- Is:0 Zero:1",
+            show("Total_WhenEmpty_IsZero", NameColouring.PASCAL),
+        )
+
+    @Test
+    fun pascal_case_starting_lower_case() =
+        assertEquals("total:0 Is:1 Zero:2", show("totalIsZero", NameColouring.PASCAL))
+}

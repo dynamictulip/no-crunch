@@ -49,7 +49,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     // No automatic parent/child propagation: each click maps to exactly one change in the exclusion rules.
     /** Checkboxes only show while choosing which tests run automatically (ticked = runs). */
     private var choosingTests = false
-    private val tree = CheckboxTree(Renderer { choosingTests }, root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
+    private val tree = CheckboxTree(Renderer({ choosingTests }, { nameColouring }), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
     private val details = DetailsPane(project, parent)
     private val bar = ProgressBar()
     private val cards = JPanel(java.awt.CardLayout())
@@ -304,6 +304,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private val sortMode: SortMode
         get() = SortMode.entries.firstOrNull { it.name == settings.state.sortMode } ?: SortMode.NAME
 
+    private val nameColouring: NameColouring
+        get() = NameColouring.entries.firstOrNull { it.name == settings.state.nameColouring } ?: NameColouring.OFF
+
     private val viewMode: ViewMode
         get() = ViewMode.entries.firstOrNull { it.name == settings.state.viewMode } ?: ViewMode.CLASSES
 
@@ -517,6 +520,18 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     }
                 })
             }
+            addSeparator("Colour Test Names")
+            NameColouring.entries.forEach { mode ->
+                add(object : ToggleAction(mode.title) {
+                    override fun getActionUpdateThread() = ActionUpdateThread.EDT
+                    override fun isSelected(e: AnActionEvent) = nameColouring == mode
+                    override fun setSelected(e: AnActionEvent, state: Boolean) {
+                        if (!state) return
+                        settings.state.nameColouring = mode.name
+                        tree.repaint()
+                    }
+                })
+            }
         })
         add(DefaultActionGroup("Sort By", true).apply {
             templatePresentation.icon = AllIcons.ObjectBrowser.Sorted
@@ -572,7 +587,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         override fun actionPerformed(e: AnActionEvent) = action()
     }
 
-    private class Renderer(private val showCheckboxes: () -> Boolean) : CheckboxTree.CheckboxTreeCellRenderer() {
+    private class Renderer(private val showCheckboxes: () -> Boolean, private val colouring: () -> NameColouring) : CheckboxTree.CheckboxTreeCellRenderer() {
         override fun customizeRenderer(tree: JTree, value: Any, selected: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean) {
             val r = textRenderer
             val editing = showCheckboxes()
@@ -634,11 +649,16 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         o.excluded && !o.manual && o.shownOutcome == null -> AllIcons.RunConfigurations.TestUnknown
                         else -> outcomeIcon(o.shownOutcome, o.freshness == null) ?: testIcon(d.state)
                     }
-                    r.append(o.label, when {
-                        o.excluded && !o.manual -> SimpleTextAttributes.GRAYED_ATTRIBUTES
-                        o.shownOutcome == "failed" -> if (o.freshness == null) FAILED else STALE_FAILED
-                        else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
-                    })
+                    // Failed and excluded tests keep their red or grey; colour coding only applies to the rest.
+                    // Theory rows show data, not a name, so they're never split.
+                    when {
+                        o.excluded && !o.manual -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        o.shownOutcome == "failed" -> r.append(o.label, if (o.freshness == null) FAILED else STALE_FAILED)
+                        o.isRow -> r.append(o.label, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                        else -> NameColouring.split(o.label, colouring()).forEach { (text, colour) ->
+                            r.append(text, colour?.let { NAME_PARTS[it] } ?: SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                        }
+                    }
                     if (o.rows.isNotEmpty()) appendCounts(o.counts, o.excluded)
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
                     appendFreshness(o.freshness)
@@ -657,6 +677,12 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             private val STALE_RED = com.intellij.ui.JBColor(java.awt.Color(0xC9, 0x8A, 0x8A), java.awt.Color(0x8C, 0x55, 0x55))
             val STALE_FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, STALE_RED)
             val STALE_FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, STALE_RED)
+            /** Colour-coded name parts: blue, purple, teal (light theme, dark theme). */
+            val NAME_PARTS = listOf(
+                com.intellij.ui.JBColor(java.awt.Color(0x2F, 0x6F, 0xC9), java.awt.Color(0x6A, 0xA7, 0xF8)),
+                com.intellij.ui.JBColor(java.awt.Color(0x9A, 0x4F, 0x8E), java.awt.Color(0xC7, 0x7D, 0xBB)),
+                com.intellij.ui.JBColor(java.awt.Color(0x24, 0x87, 0x74), java.awt.Color(0x5F, 0xB8, 0xA6)),
+            ).map { SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, it) }
         }
 
         private fun appendCounts(c: Counts, excluded: Boolean) {

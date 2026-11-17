@@ -21,6 +21,8 @@ class NoCrunchSettingsState : BaseState() {
     var viewMode by string(com.nocrunch.rider.ui.ViewMode.CLASSES.name)
     /** Tool window row order: a [com.nocrunch.rider.ui.SortMode] name. */
     var sortMode by string(com.nocrunch.rider.ui.SortMode.NAME.name)
+    /** Tool window test-name colouring: a [com.nocrunch.rider.ui.NameColouring] name. */
+    var nameColouring by string(com.nocrunch.rider.ui.NameColouring.OFF.name)
 }
 
 @Service(Service.Level.PROJECT)
