@@ -46,7 +46,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private val service = NoCrunchService.getInstance(project)
     private val root = CheckedTreeNode("root")
     // No automatic parent/child propagation: each click maps to exactly one change in the exclusion rules.
-    private val tree = CheckboxTree(Renderer(), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
+    /** Checkboxes only show while choosing which tests run automatically (ticked = runs). */
+    private var choosingTests = false
+    private val tree = CheckboxTree(Renderer { choosingTests }, root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
     private val details = DetailsPane(project, parent)
     private val bar = ProgressBar()
     private var failuresOnly = false
@@ -148,7 +150,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         try {
             root.removeAllChildren()
             for (p in TreeView.sortProjects(model, sortMode)) {
-                val pn = CheckedTreeNode(p).apply { isChecked = !p.excluded }
+                val pn = CheckedTreeNode(p).apply { isChecked = !p.excluded; isEnabled = choosingTests }
                 for (v in TreeView.of(p, viewMode, sortMode)) pn.add(treeNode(v))
                 root.add(pn)
             }
@@ -172,13 +174,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     /** Tests keep their [TestNode] as the row object; classes and groups use their [ViewNode]. */
     private fun treeNode(v: ViewNode): CheckedTreeNode = when (v) {
-        is TestView -> CheckedTreeNode(v.node).apply { isChecked = !v.excluded; isEnabled = !v.locked }
+        is TestView -> CheckedTreeNode(v.node).apply { isChecked = !v.excluded; isEnabled = choosingTests && !v.locked }
         is ClassView -> CheckedTreeNode(v).apply {
-            isChecked = !v.excluded; isEnabled = !v.locked
+            isChecked = !v.excluded; isEnabled = choosingTests && !v.locked
             v.children.forEach { add(treeNode(it)) }
         }
         is GroupView -> CheckedTreeNode(v).apply {
-            isChecked = !v.excluded; isEnabled = !v.locked
+            isChecked = !v.excluded; isEnabled = choosingTests && !v.locked
             v.children.forEach { add(treeNode(it)) }
         }
     }
@@ -303,6 +305,15 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         val expander = com.intellij.ide.DefaultTreeExpander(tree)
         add(com.intellij.ide.CommonActionsManager.getInstance().createExpandAllAction(expander, tree))
         add(com.intellij.ide.CommonActionsManager.getInstance().createCollapseAllAction(expander, tree))
+        add(object : ToggleAction("Choose Automatic Tests", "Show checkboxes: ticked tests run automatically", AllIcons.Actions.Checked) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun isSelected(e: AnActionEvent) = choosingTests
+            override fun setSelected(e: AnActionEvent, state: Boolean) {
+                choosingTests = state
+                lastModel = emptyList()
+                last?.let(::render)
+            }
+        })
         add(DefaultActionGroup("View As", true).apply {
             templatePresentation.icon = AllIcons.Actions.GroupBy
             ViewMode.entries.forEach { mode ->
@@ -362,9 +373,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         override fun actionPerformed(e: AnActionEvent) = action()
     }
 
-    private class Renderer : CheckboxTree.CheckboxTreeCellRenderer() {
+    private class Renderer(private val showCheckboxes: () -> Boolean) : CheckboxTree.CheckboxTreeCellRenderer() {
         override fun customizeRenderer(tree: JTree, value: Any, selected: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean) {
             val r = textRenderer
+            val editing = showCheckboxes()
+            checkbox.isVisible = editing
             when (val o = (value as? CheckedTreeNode)?.userObject) {
                 is ProjectNode -> {
                     r.icon = when (o.buildStatus) {
@@ -402,6 +415,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     appendDuration(o.durationMs)
                     appendFreshness(o.freshness)
                     appendManual(o.manualCount)
+                    // Without checkboxes, say which rows are left out of automatic runs.
+                    if (o.excluded && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
                 is TestNode -> {
                     val d = o.dto
@@ -417,6 +432,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
                     appendFreshness(o.freshness)
                     if (o.manual) r.append("  ▸ manual run", MANUAL)
+                    else if (o.excluded && !o.locked && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
             }
         }
