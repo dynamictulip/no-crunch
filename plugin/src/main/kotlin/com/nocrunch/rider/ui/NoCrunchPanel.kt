@@ -56,7 +56,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     /** Runs the selected tests now, including excluded ones; results are marked as a manual run. */
     private val runSelectedAction: AnAction by lazy {
-        object : AnAction("Run Selected Tests (Including Excluded)", null, AllIcons.RunConfigurations.TestState.Run) {
+        object : AnAction("Run Selected Tests", null, AllIcons.RunConfigurations.TestState.Run) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = tree.selectionPaths?.isNotEmpty() == true
