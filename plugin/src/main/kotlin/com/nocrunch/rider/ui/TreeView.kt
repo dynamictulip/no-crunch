@@ -81,6 +81,10 @@ object TreeView {
         else projects.sortedWith(byTests)
     }
 
+    /** Splits off non-test projects whose build failed: they go in the pinned "Build errors" section, not among test projects. */
+    fun splitBuildErrors(projects: List<ProjectNode>): Pair<List<ProjectNode>, List<ProjectNode>> =
+        projects.partition { !it.isTestProject && it.buildStatus in setOf("failed", "blocked") }
+
     private fun buildRank(status: String?): Int = when (status) {
         "failed" -> 0
         "blocked" -> 1

@@ -79,6 +79,10 @@ data class ProjectNode(
     val freshness: String? get() = TestTreeModel.summarise(children.mapNotNull { it.freshness })
     val isFresh: Boolean get() = freshness == null
     val rule: ExclusionRuleDto get() = ExclusionRuleDto(path)
+    /** False for library/app projects that only appear because their build broke: no tests found and never run. */
+    val isTestProject: Boolean get() = children.isNotEmpty() || run != null
+    /** Short name of the project whose broken build stops this one, if any. */
+    val blockedByName: String? get() = build?.blockedBy?.let(TestTreeModel::shortName)
 }
 
 /** Pure function from engine state to the tree shown in the tool window. */
@@ -121,9 +125,11 @@ object TestTreeModel {
             val buildBroken = build?.status in setOf("failed", "blocked")
             if (failuresOnly && classes.isEmpty() && !buildBroken) return@mapNotNull null
             if (hideExcluded && (projectExcluded || (classes.isEmpty() && byProject[path].orEmpty().isNotEmpty() && !buildBroken))) return@mapNotNull null
-            ProjectNode(path, path.substringAfterLast('/').substringBeforeLast('.'), build?.status, build, runs[path], projectExcluded, classes)
+            ProjectNode(path, shortName(path), build?.status, build, runs[path], projectExcluded, classes)
         }.sortedBy { it.name }
     }
+
+    fun shortName(path: String) = path.substringAfterLast('/').substringBeforeLast('.')
 
     /** Most important freshness first: running, then queued, then anything else counts as stale. */
     fun summarise(freshness: Collection<String>): String? = when {

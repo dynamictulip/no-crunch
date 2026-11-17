@@ -178,7 +178,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         rebuilding = true
         try {
             root.removeAllChildren()
-            for (p in TreeView.sortProjects(model, sortMode)) {
+            val (buildErrors, testProjects) = TreeView.splitBuildErrors(model)
+            // Broken non-test projects are pinned above the test projects whatever the sort.
+            if (buildErrors.isNotEmpty()) {
+                val group = CheckedTreeNode(BuildErrorsGroup(buildErrors.size)).apply { isEnabled = false }
+                for (p in buildErrors) group.add(CheckedTreeNode(p).apply { isEnabled = false })
+                root.add(group)
+            }
+            for (p in TreeView.sortProjects(testProjects, sortMode)) {
                 val pn = CheckedTreeNode(p).apply { isChecked = !p.excluded; isEnabled = choosingTests }
                 for (v in TreeView.of(p, viewMode, sortMode)) pn.add(treeNode(v))
                 root.add(pn)
@@ -219,6 +226,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
         when (val o = (it as? CheckedTreeNode)?.userObject) {
             is ProjectNode -> o.path
+            is BuildErrorsGroup -> "build-errors"
             is ClassView -> o.node.type
             is GroupView -> "${o.kind}:${o.label}"
             is TestNode -> o.dto.key
@@ -300,7 +308,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private fun selectedExclusionTargets(): List<Pair<Boolean, List<com.nocrunch.rider.engine.ExclusionRuleDto>>> =
         tree.selectionPaths.orEmpty().mapNotNull { p ->
             when (val o = (p.lastPathComponent as? CheckedTreeNode)?.userObject) {
-                is ProjectNode -> o.excluded to listOf(o.rule)
+                is ProjectNode -> if (o.isTestProject) o.excluded to listOf(o.rule) else null
                 is ViewNode -> if (o.locked) null else o.excluded to o.rules
                 is TestNode -> if (o.locked) null else o.excluded to listOf(TestTreeModel.ruleFor(o.dto))
                 else -> null
@@ -453,8 +461,15 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         override fun customizeRenderer(tree: JTree, value: Any, selected: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean) {
             val r = textRenderer
             val editing = showCheckboxes()
-            checkbox.isVisible = editing
-            when (val o = (value as? CheckedTreeNode)?.userObject) {
+            val obj = (value as? CheckedTreeNode)?.userObject
+            // Build-error rows have nothing to include or exclude.
+            checkbox.isVisible = editing && obj !is BuildErrorsGroup && (obj as? ProjectNode)?.isTestProject != false
+            when (val o = obj) {
+                is BuildErrorsGroup -> {
+                    r.icon = AllIcons.General.Error
+                    r.append("Build errors", FAILED_BOLD)
+                    r.append("  ${o.count}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                }
                 is ProjectNode -> {
                     r.icon = when (o.buildStatus) {
                         "failed" -> AllIcons.General.Error
@@ -467,14 +482,16 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         o.shownOutcome == "failed" -> if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD
                         else -> SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
                     })
-                    appendCounts(o.counts, o.excluded)
-                    appendDuration(o.durationMs)
-                    appendFreshness(o.freshness)
-                    appendManual(o.manualCount)
+                    if (o.isTestProject) {
+                        appendCounts(o.counts, o.excluded)
+                        appendDuration(o.durationMs)
+                        appendFreshness(o.freshness)
+                        appendManual(o.manualCount)
+                    }
                     when {
                         o.excluded -> r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                         o.buildStatus == "failed" -> r.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
-                        o.buildStatus == "blocked" -> r.append("  blocked by build failure", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.buildStatus == "blocked" -> r.append("  blocked by ${o.blockedByName ?: "build failure"}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                         o.run?.status == "unsupportedNotMtp" -> r.append("  unsupported (VSTest)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                         o.run?.status == "unsupportedMtpVersion" -> r.append("  unsupported MTP version", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                         o.run?.status == "crashed" -> r.append("  test host crashed", SimpleTextAttributes.ERROR_ATTRIBUTES)
@@ -576,3 +593,6 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         }
     }
 }
+
+/** Row object for the pinned section listing non-test projects whose build broke. */
+data class BuildErrorsGroup(val count: Int)
