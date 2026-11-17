@@ -75,3 +75,11 @@ The sandbox spots the new build, unloads the old plugin and loads the new one wi
 The plugin builds against the Rider installed at `~/Applications/Rider.app`. Set `RIDER_PATH` to use a different install.
 
 The engine can be driven without Rider. Run `dotnet engine/NoCrunch.Engine/bin/Debug/net10.0/NoCrunch.Engine.dll` and speak JSON-RPC 2.0 (`Content-Length` framing) on stdio. Start with `initialize {solutionPath}`. See `engine/NoCrunch.Engine/Protocol/EngineServer.cs` for the protocol.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licence
+
+[MIT](LICENSE)

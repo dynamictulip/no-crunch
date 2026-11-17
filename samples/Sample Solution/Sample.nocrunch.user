@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "excluded": [
+    {
+      "project": "samples/Sample Solution/tests/Shop.Other.Tests/Shop.Other.Tests.csproj",
+      "type": "Shop.Other.Tests.OtherTests",
+      "method": null,
+      "uid": null
+    },
+    {
+      "project": "samples/Sample Solution/tests/Shop.Theory.Tests/Shop.Theory.Tests.csproj",
+      "type": "Shop.Theory.Tests.RunTimeRowTheories",
+      "method": null,
+      "uid": null
+    }
+  ],
+  "included": null
+}
