@@ -87,9 +87,10 @@ public class EngineServerEndToEndTests
             await client.WaitIdle();
 
             var built = client.Notes.Where(n => n.method == "projectBuildFinished").Select(n => (string)n.args["project"]!).ToHashSet();
+            // Shop.E2E.Tests depends on Shop.Core too, but it's excluded as a whole, so it isn't built.
             CollectionAssert.AreEquivalent(new[]
             {
-                "src/Shop.Core/Shop.Core.csproj", "tests/Shop.Core.Tests/Shop.Core.Tests.csproj", "tests/Shop.E2E.Tests/Shop.E2E.Tests.csproj",
+                "src/Shop.Core/Shop.Core.csproj", "tests/Shop.Core.Tests/Shop.Core.Tests.csproj",
             }, built.ToArray());
 
             var finals = client.Updates().Where(u => (string?)u["state"] is "passed" or "failed").ToList();

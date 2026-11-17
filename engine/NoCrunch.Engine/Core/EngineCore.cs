@@ -81,8 +81,14 @@ public sealed class EngineCore(
     {
         List<TestResultUpdate> nowExcluded;
         List<string> nowIncluded;
+        List<string> projectsBack;
         lock (_lock)
         {
+            // Test projects that were skipped as wholly excluded and no longer are: build and run them now.
+            projectsBack = _graph?.Projects
+                .Where(p => p.IsTestProject && _exclusions.ExcludesWholeProject(p.RepoRelativePath) && !set.ExcludesWholeProject(p.RepoRelativePath))
+                .Select(p => p.RepoRelativePath).ToList() ?? [];
+            _pending.Projects.UnionWith(projectsBack);
             _exclusions = set;
             // A manual result of an excluded test is kept: it's what the user ran by hand.
             nowExcluded = _results.Values.Where(r => r.State != TestState.Excluded && r.RunKind != RunKind.Manual && set.IsExcluded(r.Id))
@@ -94,8 +100,8 @@ public sealed class EngineCore(
         if (nowIncluded.Count > 0)
         {
             lock (_lock) _pending.RerunKeys.UnionWith(nowIncluded);
-            Signal();
         }
+        if (nowIncluded.Count > 0 || projectsBack.Count > 0) Signal();
     }
 
     public void RunAll()
@@ -231,6 +237,14 @@ public sealed class EngineCore(
                         .Select(p => p.RepoRelativePath));
             }
 
+            // Test projects excluded as a whole aren't built or run, unless a test in them was asked for by hand.
+            HashSet<string> skipped;
+            lock (_lock)
+                skipped = graph.Projects
+                    .Where(p => p.IsTestProject && _exclusions.ExcludesWholeProject(p.RepoRelativePath) && !manualProjects.Contains(p.RepoRelativePath))
+                    .Select(p => p.RepoRelativePath).ToHashSet(StringComparer.Ordinal);
+            dirty.ExceptWith(skipped);
+
             if (dirty.Count == 0)
             {
                 await events.StateChanged(EngineState.Idle, 0);
@@ -240,6 +254,7 @@ public sealed class EngineCore(
             // Projects that failed earlier get another go, with their dependents; references not yet built
             // this session are included so a project never builds against missing outputs.
             dirty.UnionWith(graph.WithDependents(_unhealthy));
+            dirty.ExceptWith(skipped);
             var closure = graph.WithReferences(dirty);
             dirty.UnionWith(closure.Where(p => _unhealthy.Contains(p) || !_builtThisSession.Contains(p)));
 

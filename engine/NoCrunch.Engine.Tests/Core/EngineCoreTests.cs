@@ -355,6 +355,48 @@ public class EngineCoreTests
     }
 
     [TestMethod]
+    public async Task A_wholly_excluded_test_project_is_not_built()
+    {
+        var h = await CreateAsync();
+        h.Core.SetExclusions(new ExclusionSet([new ExclusionRule(Other, null, null, null)]));
+        Drain(h);
+
+        h.Core.RunAll();
+        await h.Events.WaitIdleAsync();
+        Assert.IsFalse(h.Build.Builds.SelectMany(b => b).Contains(Other), "excluded project built");
+        Assert.IsFalse(h.Tests.Runs.Contains(Other), "excluded project run");
+        Assert.IsTrue(h.Tests.Runs.Contains(CoreTests));
+    }
+
+    [TestMethod]
+    public async Task A_wholly_excluded_test_project_is_built_for_a_manual_run_or_when_included_again()
+    {
+        var h = await CreateAsync();
+        h.Core.SetExclusions(new ExclusionSet([new ExclusionRule(Other, null, null, null)]));
+        Drain(h);
+
+        h.Core.RunTests([$"{Other}|T|O"]);
+        await h.Events.WaitIdleAsync();
+        Assert.IsTrue(h.Build.Builds.SelectMany(b => b).Contains(Other), "manual run builds it");
+        CollectionAssert.AreEquivalent(new[] { $"{Other}|T|O" }, h.Tests.Executed.ToArray());
+
+        Drain(h);
+        h.Core.SetExclusions(ExclusionSet.Empty);
+        await h.Events.WaitIdleAsync();
+        Assert.IsTrue(h.Build.Builds.SelectMany(b => b).Contains(Other), "including it again builds it");
+        Assert.IsTrue(h.Tests.Runs.Contains(Other));
+    }
+
+    [TestMethod]
+    public void A_project_with_a_test_included_again_is_not_wholly_excluded()
+    {
+        var set = new ExclusionSet([new ExclusionRule(Other, null, null, null), new ExclusionRule(Other, "T", "O", null, Include: true)]);
+        Assert.IsFalse(set.ExcludesWholeProject(Other));
+        Assert.IsTrue(new ExclusionSet([new ExclusionRule(Other, null, null, null)]).ExcludesWholeProject(Other));
+        Assert.IsFalse(new ExclusionSet([new ExclusionRule(Other, "T", null, null)]).ExcludesWholeProject(Other));
+    }
+
+    [TestMethod]
     public async Task Paused_queues_changes_and_Resume_runs_them()
     {
         var h = await CreateAsync();

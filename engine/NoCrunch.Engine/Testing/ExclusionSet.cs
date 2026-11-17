@@ -31,6 +31,14 @@ public sealed class ExclusionSet(IEnumerable<ExclusionRule> rules)
         return best is { Include: false };
     }
 
+    /// <summary>
+    /// The whole project is excluded (its own rule) with nothing inside it included again, so it needn't be built or
+    /// run automatically.
+    /// </summary>
+    public bool ExcludesWholeProject(string project) =>
+        _rules.Any(r => r.Specificity == 0 && !r.Include && string.Equals(r.Project, project, StringComparison.Ordinal))
+        && !_rules.Any(r => r.Include && string.Equals(r.Project, project, StringComparison.Ordinal));
+
     private static bool Matches(ExclusionRule rule, TestId id)
     {
         if (!string.Equals(rule.Project, id.Project, StringComparison.Ordinal)) return false;
