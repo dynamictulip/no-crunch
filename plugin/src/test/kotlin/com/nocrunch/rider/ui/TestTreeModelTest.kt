@@ -264,4 +264,19 @@ class TestTreeModelTest {
         assertEquals("59.9 s", TestTreeModel.formatDuration(59_900.0))
         assertEquals("1 m 05 s", TestTreeModel.formatDuration(65_000.0))
     }
+
+    @Test
+    fun a_stale_manual_result_of_an_excluded_test_stops_counting_for_its_parents() {
+        val stale = t(unit, "A.Other", "Always_passes", "stale").copy(runKind = "manual", lastOutcome = "failed")
+        val pass = t(unit, "A.Calc", "Adds", "passed")
+        val tree = TestTreeModel.build(listOf(stale, pass), emptyMap(), listOf(ExclusionRuleDto(unit, "A.Other")), false)
+        val project = tree.single()
+        assertEquals("passed", project.shownOutcome, "the excluded test's old failure doesn't turn the project red")
+        assertEquals(null, project.freshness)
+        assertEquals(Counts(passed = 1), project.counts)
+        assertEquals(0, project.manualCount)
+        val other = project.children.single { it.type == "A.Other" }
+        assertEquals(null, other.shownOutcome)
+        assertEquals(Counts(), other.counts)
+    }
 }

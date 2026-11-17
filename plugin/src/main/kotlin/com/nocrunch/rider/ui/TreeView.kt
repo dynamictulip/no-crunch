@@ -32,9 +32,9 @@ sealed interface ViewNode {
 
     val counts: Counts get() = leaves.fold(Counts()) { acc, t -> acc + t.counts }
     val durationMs: Double? get() = leaves.mapNotNull { it.countedDurationMs }.takeIf { it.isNotEmpty() }?.sum()
-    val manualCount: Int get() = leaves.count { it.manual }
-    val shownOutcome: String? get() = TestTreeModel.worst(leaves.mapNotNull { it.shownOutcome })
-    val freshness: String? get() = TestTreeModel.summarise(leaves.filterNot { it.excluded && !it.manual }.mapNotNull { it.freshness })
+    val manualCount: Int get() = leaves.count { it.manual && it.countsForParents }
+    val shownOutcome: String? get() = TestTreeModel.worst(leaves.filter { it.countsForParents }.mapNotNull { it.shownOutcome })
+    val freshness: String? get() = TestTreeModel.summarise(leaves.filter { it.countsForParents }.mapNotNull { it.freshness })
     val isFresh: Boolean get() = freshness == null
 }
 

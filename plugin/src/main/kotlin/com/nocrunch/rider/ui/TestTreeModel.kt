@@ -49,7 +49,13 @@ data class TestNode(
         else dto.type?.let { dto.displayName.removePrefix("$it.") } ?: dto.displayName
 
     /** Run time that counts towards parents: excluded tests only count once run by hand. */
-    val countedDurationMs: Double? get() = if (excluded && !manual) null else dto.durationMs
+    val countedDurationMs: Double? get() = if (countsForParents) dto.durationMs else null
+
+    /**
+     * Its result counts towards its parents' status, counts, run time and freshness. Excluded tests only count while
+     * they hold a manual run's result that isn't stale yet.
+     */
+    val countsForParents: Boolean get() = !excluded || (manual && freshness != "stale")
 
     /** The result comes from a run the user asked for, not from continuous testing. */
     val manual: Boolean get() = dto.runKind == "manual"
@@ -68,7 +74,7 @@ data class TestNode(
     val counts: Counts
         get() = when {
             rows.isNotEmpty() -> rows.fold(Counts()) { acc, r -> acc + r.counts }
-            excluded && !manual -> Counts()
+            !countsForParents -> Counts()
             dto.state == "passed" -> Counts(passed = 1)
             dto.state == "failed" -> Counts(failed = 1)
             dto.state in PENDING_STATES -> Counts(pending = 1)
@@ -91,12 +97,12 @@ data class ClassNode(
     val parentExcluded: Boolean = false,
 ) {
     val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
-    val manualCount: Int get() = children.count { it.manual }
+    val manualCount: Int get() = children.count { it.manual && it.countsForParents }
     /** Total run time of the tests below, or null if none has run. */
     val durationMs: Double? get() = children.mapNotNull { it.countedDurationMs }.takeIf { it.isNotEmpty() }?.sum()
-    val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
+    val shownOutcome: String? get() = TestTreeModel.worst(children.filter { it.countsForParents }.mapNotNull { it.shownOutcome })
     /** Why some results below aren't current: running, queued or stale; null when everything is current. */
-    val freshness: String? get() = TestTreeModel.summarise(children.filterNot { it.excluded && !it.manual }.mapNotNull { it.freshness })
+    val freshness: String? get() = TestTreeModel.summarise(children.filter { it.countsForParents }.mapNotNull { it.freshness })
     /** Every shown outcome is current (nothing stale, queued or running). */
     val isFresh: Boolean get() = freshness == null
 

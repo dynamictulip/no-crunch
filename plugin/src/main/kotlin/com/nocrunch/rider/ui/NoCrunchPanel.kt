@@ -642,12 +642,12 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     out.append("  ${o.count}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                 }
                 is ProjectNode -> {
-                    r.icon = when (o.buildStatus) {
+                    r.icon = withKind(when (o.buildStatus) {
                         "failed" -> AllIcons.General.Error
                         "blocked" -> AllIcons.General.Warning
                         "building" -> AllIcons.Process.Step_1
-                        else -> outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
-                    }
+                        else -> if (o.excluded) KindIcons.excluded else outcomeIcon(o.shownOutcome, o.isFresh)
+                    }, KindIcons.project)
                     when {
                         o.excluded -> r.append(o.name, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.name, if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD)
@@ -669,9 +669,17 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     }
                 }
                 is ViewNode -> {
-                    r.icon = outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
+                    // Grouping rows and classes show their status beside what they are.
+                    val status = if (o.excluded) KindIcons.excluded else outcomeIcon(o.shownOutcome, o.isFresh)
+                    r.icon = when {
+                        o is GroupView && o.kind == GroupKind.NAMESPACE -> withKind(status, KindIcons.namespace)
+                        o is GroupView && o.kind == GroupKind.FOLDER -> withKind(status, KindIcons.folder)
+                        o is GroupView -> withKind(status, KindIcons.file(o.label))
+                        else -> withKind(status, KindIcons.testSet)
+                    }
                     when {
-                        o.excluded && o.manualCount == 0 -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        // Excluded rows are grey unless they hold a current manual result.
+                        o.excluded && o.leaves.none { it.manual && it.freshness == null } -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.label, if (o.isFresh) FAILED else STALE_FAILED)
                         else -> appendName(o.label, parent = true)
                     }
@@ -684,18 +692,28 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 }
                 is TestNode -> {
                     val d = o.dto
-                    r.icon = when {
-                        o.excluded && !o.manual && o.shownOutcome == null -> AllIcons.RunConfigurations.TestUnknown
-                        else -> outcomeIcon(o.shownOutcome, o.freshness == null) ?: testIcon(d.state)
-                    }
+                    // A theory or group of data rows shows its status beside the two circles, like a class. A single
+                    // test shows its status once there's a result (or while running), otherwise what it is.
+                    // Excluded tests always show the excluded icon; a manual run's result goes beside the run time.
+                    val status = if (o.excluded) KindIcons.excluded
+                        else outcomeIcon(o.shownOutcome, o.freshness == null) ?: AllIcons.Process.Step_1.takeIf { d.state == "running" }
+                    r.icon = if (o.rows.isNotEmpty()) withKind(status, KindIcons.testSet) else status ?: KindIcons.test
                     // Failed and excluded rows keep their red or grey; colour coding only applies to the rest.
                     when {
-                        o.excluded && !o.manual -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        // Excluded tests are grey unless they have a current manual result; a stale one goes grey again.
+                        o.excluded && !(o.manual && o.freshness == null) -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.label, if (o.freshness == null) FAILED else STALE_FAILED)
                         o.isRow -> appendArgs(o.label)
                         else -> appendName(o.label)
                     }
                     if (o.rows.isNotEmpty()) appendCounts(o.counts, o.excluded)
+                    if (o.excluded && o.rows.isEmpty()) {
+                        val fresh = o.freshness == null
+                        when (o.shownOutcome) {
+                            "passed" -> out.append("   ✔", if (fresh) PASSED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                            "failed" -> out.append("   ✖", if (fresh) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        }
+                    }
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
                     appendFreshness(o.freshness)
                     // A theory's rows share its run, so only the theory says it was a manual run.
@@ -755,6 +773,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             out.append("  ○ ${c.pending}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
         }
 
+        /** Status icon followed by a kind icon (project, namespace, folder, file), like Rider's test tree. */
+        private fun withKind(status: Icon?, kind: Icon): Icon =
+            if (status == null) kind else com.intellij.ui.RowIcon(status, com.intellij.util.ui.EmptyIcon.create(com.intellij.util.ui.JBUI.scale(4), 1), kind)
+
         /** Outcome icon, faded when the result is from an earlier run (stale/queued/running). */
         private fun outcomeIcon(outcome: String?, fresh: Boolean): Icon? {
             val icon = when (outcome) {
@@ -783,22 +805,6 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             if (n > 0) out.append("  ▸ $n manual", MANUAL)
         }
 
-        private fun stateIcon(c: Counts): Icon = when {
-            c.failed > 0 -> AllIcons.RunConfigurations.TestError
-            c.pending > 0 -> AllIcons.RunConfigurations.TestNotRan
-            c.passed > 0 -> AllIcons.RunConfigurations.TestPassed
-            else -> AllIcons.RunConfigurations.TestNotRan
-        }
-
-        private fun testIcon(state: String): Icon = when (state) {
-            "passed" -> AllIcons.RunConfigurations.TestPassed
-            "failed" -> AllIcons.RunConfigurations.TestError
-            "skipped" -> AllIcons.RunConfigurations.TestSkipped
-            "excluded" -> AllIcons.RunConfigurations.TestIgnored
-            "running" -> AllIcons.Process.Step_1
-            "queued" -> AllIcons.RunConfigurations.TestNotRan
-            else -> AllIcons.RunConfigurations.TestUnknown // stale, discovered
-        }
     }
 }
 
