@@ -383,23 +383,26 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         add(com.intellij.ide.CommonActionsManager.getInstance().createCollapseAllAction(expander, tree))
         addSeparator()
         // Filter and display
-        add(object : ToggleAction("Show Failures Only", null, AllIcons.RunConfigurations.ShowIgnored) {
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-            override fun isSelected(e: AnActionEvent) = failuresOnly
-            override fun setSelected(e: AnActionEvent, state: Boolean) {
-                failuresOnly = state
-                lastModel = emptyList()
-                last?.let(::render)
-            }
-        })
-        add(object : ToggleAction("Hide Excluded Tests", null, AllIcons.Actions.ToggleVisibility) {
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-            override fun isSelected(e: AnActionEvent) = settings.state.hideExcluded
-            override fun setSelected(e: AnActionEvent, state: Boolean) {
-                settings.state.hideExcluded = state
-                lastModel = emptyList()
-                last?.let(::render)
-            }
+        add(DefaultActionGroup("Filter", true).apply {
+            templatePresentation.icon = AllIcons.General.Filter
+            add(object : ToggleAction("Show Failures Only") {
+                override fun getActionUpdateThread() = ActionUpdateThread.EDT
+                override fun isSelected(e: AnActionEvent) = failuresOnly
+                override fun setSelected(e: AnActionEvent, state: Boolean) {
+                    failuresOnly = state
+                    lastModel = emptyList()
+                    last?.let(::render)
+                }
+            })
+            add(object : ToggleAction("Hide Excluded Tests") {
+                override fun getActionUpdateThread() = ActionUpdateThread.EDT
+                override fun isSelected(e: AnActionEvent) = settings.state.hideExcluded
+                override fun setSelected(e: AnActionEvent, state: Boolean) {
+                    settings.state.hideExcluded = state
+                    lastModel = emptyList()
+                    last?.let(::render)
+                }
+            })
         })
         add(DefaultActionGroup("View As", true).apply {
             templatePresentation.icon = AllIcons.Actions.GroupBy
