@@ -277,13 +277,19 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 if (service.state.value.state == "paused") service.resume() else service.pause()
             }
         })
-        add(simple("Run All Tests", AllIcons.RunConfigurations.TestState.Run_run) { service.runAll() })
-        add(simple("Run All Tests Including Excluded", RUN_ALL_INCLUDING_EXCLUDED) {
-            // Show results for excluded tests too, even if they were hidden.
-            if (settings.state.hideExcluded) { settings.state.hideExcluded = false; lastModel = emptyList(); last?.let(::render) }
-            service.runAllIncludingExcluded()
+        addSeparator()
+        // One "Run" dropdown instead of three run buttons.
+        add(DefaultActionGroup("Run", true).apply {
+            templatePresentation.icon = AllIcons.Actions.Execute
+            add(simple("Run All Tests", AllIcons.RunConfigurations.TestState.Run_run) { service.runAll() })
+            add(simple("Run All Tests Including Excluded", RUN_ALL_INCLUDING_EXCLUDED) {
+                // Show results for excluded tests too, even if they were hidden.
+                if (settings.state.hideExcluded) { settings.state.hideExcluded = false; lastModel = emptyList(); last?.let(::render) }
+                service.runAllIncludingExcluded()
+            })
+            add(runSelectedAction)
         })
-        add(runSelectedAction)
+        addSeparator()
         add(object : ToggleAction("Show Failures Only", null, AllIcons.RunConfigurations.ShowIgnored) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun isSelected(e: AnActionEvent) = failuresOnly
