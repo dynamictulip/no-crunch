@@ -12,8 +12,23 @@ data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0
     fun label() = "✔ $passed  ✖ $failed  ○ $pending"
 }
 
-/** [locked]: excluded by an ancestor's rule, so it can't be toggled on its own. */
-data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: Boolean = false) {
+/**
+ * [locked]: excluded by an ancestor's rule, so it can't be toggled on its own.
+ * [rows]: data rows of a theory whose rows are only known once it runs (they share its UID); shown nested under it.
+ * [isRow]: this node is one of those rows.
+ */
+data class TestNode(
+    val dto: TestResultDto,
+    val excluded: Boolean,
+    val locked: Boolean = false,
+    val rows: List<TestNode> = emptyList(),
+    val isRow: Boolean = false,
+) {
+    /** Rows show just their arguments; everything else shows the full display name. */
+    val label: String
+        get() = if (isRow) dto.displayName.indexOf('(').takeIf { it >= 0 }?.let { dto.displayName.substring(it) } ?: dto.displayName
+        else dto.displayName
+
     /** Run time that counts towards parents: excluded tests only count once run by hand. */
     val countedDurationMs: Double? get() = if (excluded && !manual) null else dto.durationMs
 
@@ -33,6 +48,7 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: B
 
     val counts: Counts
         get() = when {
+            rows.isNotEmpty() -> rows.fold(Counts()) { acc, r -> acc + r.counts }
             excluded && !manual -> Counts()
             dto.state == "passed" -> Counts(passed = 1)
             dto.state == "failed" -> Counts(failed = 1)
@@ -112,9 +128,18 @@ object TestTreeModel {
                         rules.any { it.project == path && it.type == type && it.method == null && it.uid == null }
                     val classExcluded = projectExcluded || ownClassRule ||
                         (type == UNKNOWN_CLASS && members.isNotEmpty() && members.all { isExcluded(it, rules) })
-                    val nodes = members
+                    // Rows that share a UID with a row-less entry belong to that theory: its data was only known at run time.
+                    val theoryUids = members.filter { it.variant == null }.map { it.uid }.toSet()
+                    val (rowDtos, topLevel) = members.partition { it.variant != null && it.uid in theoryUids }
+                    val rowsByUid = rowDtos.groupBy { it.uid }
+                    fun node(d: TestResultDto, isRow: Boolean = false) =
+                        TestNode(d, projectExcluded || ownClassRule || isExcluded(d, rules), locked = projectExcluded || ownClassRule || isRow, isRow = isRow)
+                    val nodes = topLevel
                         .sortedWith(compareBy({ it.method ?: it.displayName }, { it.displayName }))
-                        .map { TestNode(it, projectExcluded || ownClassRule || isExcluded(it, rules), locked = projectExcluded || ownClassRule) }
+                        .map { d ->
+                            node(d).copy(rows = rowsByUid[d.uid].orEmpty().filter { d.variant == null }
+                                .sortedBy { it.displayName }.map { node(it, isRow = true) })
+                        }
                         .filter { !failuresOnly || it.dto.state == "failed" }
                         .filter { !hideExcluded || !it.excluded }
                     ClassNode(path, type, classExcluded, nodes, locked = projectExcluded)

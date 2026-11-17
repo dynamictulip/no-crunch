@@ -210,7 +210,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     /** Tests keep their [TestNode] as the row object; classes and groups use their [ViewNode]. */
     private fun treeNode(v: ViewNode): CheckedTreeNode = when (v) {
-        is TestView -> CheckedTreeNode(v.node).apply { isChecked = !v.excluded; isEnabled = choosingTests && !v.locked }
+        is TestView -> CheckedTreeNode(v.node).apply {
+            isChecked = !v.excluded; isEnabled = choosingTests && !v.locked
+            v.node.rows.forEach { add(CheckedTreeNode(it).apply { isChecked = !it.excluded; isEnabled = false }) }
+        }
         is ClassView -> CheckedTreeNode(v).apply {
             isChecked = !v.excluded; isEnabled = choosingTests && !v.locked
             v.children.forEach { add(treeNode(it)) }
@@ -463,7 +466,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             val editing = showCheckboxes()
             val obj = (value as? CheckedTreeNode)?.userObject
             // Build-error rows have nothing to include or exclude.
-            checkbox.isVisible = editing && obj !is BuildErrorsGroup && (obj as? ProjectNode)?.isTestProject != false
+            // Theory rows follow their theory; they can't be included or excluded on their own.
+            checkbox.isVisible = editing && obj !is BuildErrorsGroup && (obj as? ProjectNode)?.isTestProject != false &&
+                (obj as? TestNode)?.isRow != true
             when (val o = obj) {
                 is BuildErrorsGroup -> {
                     r.icon = AllIcons.General.Error
@@ -517,14 +522,16 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         o.excluded && !o.manual && o.shownOutcome == null -> AllIcons.RunConfigurations.TestUnknown
                         else -> outcomeIcon(o.shownOutcome, o.freshness == null) ?: testIcon(d.state)
                     }
-                    r.append(d.displayName, when {
+                    r.append(o.label, when {
                         o.excluded && !o.manual -> SimpleTextAttributes.GRAYED_ATTRIBUTES
                         o.shownOutcome == "failed" -> if (o.freshness == null) FAILED else STALE_FAILED
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
+                    if (o.rows.isNotEmpty()) appendCounts(o.counts, o.excluded)
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
                     appendFreshness(o.freshness)
-                    if (o.manual) r.append("  ▸ manual run", MANUAL)
+                    // A theory's rows share its run, so only the theory says it was a manual run.
+                    if (o.manual && !o.isRow) r.append("  ▸ manual run", MANUAL)
                     else if (o.excluded && !o.locked && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
             }

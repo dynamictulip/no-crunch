@@ -99,6 +99,11 @@ public class EngineCoreTests
         };
         public ConcurrentBag<string> Executed { get; } = [];
         public string? FailureMessage { get; set; }
+        /// <summary>
+        /// Theories whose data can't be listed up front (xUnit with non-serialisable data): discovery reports the method once,
+        /// the run reports one result per row with the method's UID and the row as the variant.
+        /// </summary>
+        public Dictionary<string, (string variant, TestState state)[]> Rows { get; } = new();
 
         public async Task<ProjectRunOutcome> RunAsync(ProjectInfo project, Func<TestId, bool> shouldRun,
             Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct)
@@ -109,7 +114,9 @@ public class EngineCoreTests
             var ran = ids.Where(t => shouldRun(t.id)).ToList();
             foreach (var t in ran) Executed.Add(t.id.Key);
             if (ran.Count > 0)
-                await onUpdates(ran.Select(t => U(t.id, t.state) with { Message = t.state == TestState.Failed ? FailureMessage : null }).ToList());
+                await onUpdates(ran.SelectMany(t => Rows.TryGetValue(t.id.Method!, out var rows)
+                    ? rows.Select(r => U(t.id with { Variant = r.variant }, r.state) with { DurationMs = 10 })
+                    : [U(t.id, t.state) with { Message = t.state == TestState.Failed ? FailureMessage : null }]).ToList());
             return new ProjectRunOutcome(project.RepoRelativePath, ProjectRunStatus.Completed, null);
         }
     }
@@ -144,7 +151,7 @@ public class EngineCoreTests
         public Task TestResults(IReadOnlyList<TestResultUpdate> updates) { foreach (var u in updates) Results.Enqueue(u); return Task.CompletedTask; }
         public Task ProjectRunFinished(ProjectRunOutcome outcome) { RunsFinished.Enqueue(outcome); return Task.CompletedTask; }
         public Task Log_(string level, string message) => Task.CompletedTask;
-        Task IEngineEvents.Log(string level, string message) => Task.CompletedTask;
+        Task IEngineEvents.Log(string level, string message) { Log.Enqueue(level + ":" + message); return Task.CompletedTask; }
 
         public async Task WaitIdleAsync()
         {
@@ -430,6 +437,66 @@ public class EngineCoreTests
 
         Assert.IsTrue(h.Build.Restores >= 3, $"restore retried (startup + failed + retry), was {h.Build.Restores}");
         CollectionAssert.AreEquivalent(new[] { Core, CoreTests }, h.Build.Builds.Single());
+    }
+
+    private const string TheoryKey = $"{CoreTests}|T|Th";
+    private static string RowKey(string row) => $"{TheoryKey}|{row}";
+
+    private static async Task<Harness> CreateWithTheoryAsync(params (string variant, TestState state)[] rows)
+    {
+        var h = await CreateAsync(start: false);
+        h.Tests.Tests[CoreTests] = [("A", TestState.Passed), ("Th", TestState.Passed)];
+        h.Tests.Rows["Th"] = rows;
+        await h.Core.StartAsync(CancellationToken.None);
+        await h.Events.WaitIdleAsync();
+        return h;
+    }
+
+    [TestMethod]
+    public async Task Theory_whose_rows_are_only_known_at_run_time_takes_the_worst_row_result()
+    {
+        var h = await CreateWithTheoryAsync(("Th(1)", TestState.Passed), ("Th(2)", TestState.Failed));
+
+        var stored = h.Store.Load();
+        Assert.AreEqual(TestState.Failed, stored[TheoryKey].State, "the theory must not stay queued");
+        Assert.AreEqual(20.0, stored[TheoryKey].DurationMs, "run time is the rows' total");
+        Assert.AreEqual(TestState.Passed, stored[RowKey("Th(1)")].State);
+        Assert.AreEqual(TestState.Failed, stored[RowKey("Th(2)")].State);
+    }
+
+    [TestMethod]
+    public async Task Theory_rows_stay_visible_while_queued_and_vanish_when_no_longer_reported()
+    {
+        var h = await CreateWithTheoryAsync(("Th(1)", TestState.Passed), ("Th(2)", TestState.Failed));
+        Drain(h);
+        h.Tests.Rows["Th"] = [("Th(1)", TestState.Passed)];
+
+        h.Core.FilesChanged([Abs(h, "src/Core/Calc.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        var queuedRow = h.Events.Results.FirstOrDefault(r => r.Id.Key == RowKey("Th(2)") && r.State == TestState.Queued);
+        Assert.IsNotNull(queuedRow, "earlier rows are queued with the theory, not dropped");
+        Assert.AreEqual(TestState.Failed, queuedRow.LastOutcome);
+        var stored = h.Store.Load();
+        Assert.IsFalse(stored.ContainsKey(RowKey("Th(2)")), "a row the theory no longer produces is removed");
+        Assert.AreEqual(TestState.Passed, stored[TheoryKey].State);
+    }
+
+    [TestMethod]
+    public async Task Running_one_theory_row_by_hand_runs_the_theory_and_marks_its_rows_manual()
+    {
+        var h = await CreateWithTheoryAsync(("Th(1)", TestState.Passed), ("Th(2)", TestState.Passed));
+        h.Core.SetExclusions(new ExclusionSet([new ExclusionRule(CoreTests, "T", "Th", null)]));
+        Drain(h);
+
+        h.Core.RunTests([RowKey("Th(2)")]);
+        await h.Events.WaitIdleAsync();
+
+        CollectionAssert.Contains(h.Tests.Executed.ToArray(), TheoryKey);
+        var stored = h.Store.Load();
+        Assert.AreEqual(RunKind.Manual, stored[RowKey("Th(1)")].RunKind);
+        Assert.AreEqual(RunKind.Manual, stored[TheoryKey].RunKind);
+        Assert.AreEqual(TestState.Passed, stored[TheoryKey].State);
     }
 
     [TestMethod]

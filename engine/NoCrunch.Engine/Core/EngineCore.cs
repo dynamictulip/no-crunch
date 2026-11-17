@@ -327,12 +327,25 @@ public sealed class EngineCore(
         bool manualOnly, CancellationToken ct)
     {
         var first = true;
-        TestResultUpdate Tag(TestResultUpdate r) => r with { RunKind = manualKeys.Contains(r.Id.Key) ? RunKind.Manual : RunKind.Auto };
+        // Asking for one theory row runs the whole theory: rows share the theory's UID, and only the UID can be run.
+        HashSet<string> runUids, manualUids;
+        lock (_lock)
+        {
+            runUids = UidsOf(runKeys);
+            manualUids = UidsOf(manualKeys);
+        }
+        TestResultUpdate Tag(TestResultUpdate r) =>
+            r with { RunKind = manualKeys.Contains(r.Id.Key) || manualUids.Contains(r.Id.Uid) ? RunKind.Manual : RunKind.Auto };
+
+        // Theories whose data rows can't be listed up front (e.g. xUnit with non-serialisable data) are discovered once,
+        // then report one result per row with the theory's UID. Map UID -> theory key, and collect each theory's rows.
+        var theories = new Dictionary<string, string>(StringComparer.Ordinal);
+        var rowsSeen = new Dictionary<string, List<TestResultUpdate>>(StringComparer.Ordinal);
 
         var outcome = await tests.RunAsync(project,
             id =>
             {
-                if (runKeys.Contains(id.Key)) return true;
+                if (runKeys.Contains(id.Key) || runUids.Contains(id.Uid)) return true;
                 if (manualOnly) return false;
                 lock (_lock) return !_exclusions.IsExcluded(id);
             },
@@ -350,11 +363,17 @@ public sealed class EngineCore(
                             .ToDictionary(r => r.Id.Key, StringComparer.Ordinal);
                         if (!manualOnly)
                             foreach (var key in previous.Keys) _results.Remove(key);
-                        foreach (var r in batch)
+                        foreach (var r in batch) theories.TryAdd(r.Id.Uid, r.Id.Key);
+                        // Rows from earlier runs follow their theory (queued, excluded...) until the run reports them again.
+                        var rows = previous.Values
+                            .Where(p => theories.TryGetValue(p.Id.Uid, out var tk) && tk != p.Id.Key)
+                            .Select(p => (theory: batch.First(b => b.Id.Key == theories[p.Id.Uid]), row: p))
+                            .Select(x => x.row with { State = x.theory.State, RunKind = x.theory.RunKind, DurationMs = null, Message = null, StackTrace = null });
+                        foreach (var r in batch.Concat(rows.ToList()))
                         {
                             var hasPrevious = previous.TryGetValue(r.Id.Key, out var prev);
                             // A manual-only run reports untouched tests as Excluded; keep their previous result instead.
-                            if (manualOnly && !runKeys.Contains(r.Id.Key) && hasPrevious) continue;
+                            if (manualOnly && !runKeys.Contains(r.Id.Key) && !runUids.Contains(r.Id.Uid) && hasPrevious) continue;
                             // An automatic run skips excluded tests; keep the result of an earlier manual run of them.
                             var keep = r.State == TestState.Excluded && hasPrevious && prev!.RunKind == RunKind.Manual
                                        && prev.State != TestState.Excluded;
@@ -363,7 +382,7 @@ public sealed class EngineCore(
                             discovered.Add(current);
                         }
                     }
-                    if (manualOnly) await events.TestResults(discovered.Where(r => runKeys.Contains(r.Id.Key)).ToList());
+                    if (manualOnly) await events.TestResults(discovered.Where(r => runKeys.Contains(r.Id.Key) || runUids.Contains(r.Id.Uid)).ToList());
                     else await events.TestsDiscovered(project.RepoRelativePath, discovered);
                 }
                 else
@@ -373,12 +392,67 @@ public sealed class EngineCore(
                     {
                         merged = batch.Select(r => CarryForward(r, _results.GetValueOrDefault(r.Id.Key))).ToList();
                         foreach (var r in merged) _results[r.Id.Key] = r;
+                        // A row result means its theory is running; the theory's own result is settled when the run ends.
+                        foreach (var r in merged.ToList())
+                        {
+                            if (!theories.TryGetValue(r.Id.Uid, out var tk) || tk == r.Id.Key) continue;
+                            if (!rowsSeen.TryGetValue(tk, out var seen)) rowsSeen[tk] = seen = [];
+                            seen.RemoveAll(x => x.Id.Key == r.Id.Key);
+                            seen.Add(r);
+                            if (_results.TryGetValue(tk, out var theory) && theory.State != TestState.Running)
+                            {
+                                var running = CarryForward(Tag(theory with { State = TestState.Running }), theory);
+                                _results[tk] = running;
+                                merged.Add(running);
+                            }
+                        }
                     }
                     await events.TestResults(merged);
                 }
             }, ct);
+        if (!ct.IsCancellationRequested && outcome.Status == ProjectRunStatus.Completed && rowsSeen.Count > 0)
+            await events.TestsDiscovered(project.RepoRelativePath, SettleTheories(project.RepoRelativePath, rowsSeen, Tag));
         if (!ct.IsCancellationRequested) await events.ProjectRunFinished(outcome);
     }
+
+    /// <summary>
+    /// Gives each theory the worst result of the rows it just reported, and drops rows it no longer produces.
+    /// Returns the project's full result list, which replaces what clients have for it.
+    /// </summary>
+    private List<TestResultUpdate> SettleTheories(string project, Dictionary<string, List<TestResultUpdate>> rowsSeen,
+        Func<TestResultUpdate, TestResultUpdate> tag)
+    {
+        lock (_lock)
+        {
+            foreach (var (theoryKey, rows) in rowsSeen)
+            {
+                if (!_results.TryGetValue(theoryKey, out var theory)) continue;
+                var finished = rows.Where(r => r.IsOutcome).ToList();
+                var failed = finished.Count(r => r.State == TestState.Failed);
+                var state = failed > 0 ? TestState.Failed
+                    : finished.Any(r => r.State == TestState.Passed) ? TestState.Passed
+                    : finished.Count > 0 ? TestState.Skipped : theory.State;
+                _results[theoryKey] = tag(theory with
+                {
+                    State = state,
+                    LastOutcome = null,
+                    DurationMs = finished.Sum(r => r.DurationMs ?? 0),
+                    Message = failed > 0 ? $"{failed} of {finished.Count} data rows failed" : null,
+                    StackTrace = null,
+                });
+                var current = rows.Select(r => r.Id.Key).ToHashSet(StringComparer.Ordinal);
+                var gone = _results.Values
+                    .Where(r => r.Id.Project == project && r.Id.Uid == theory.Id.Uid && r.Id.Key != theoryKey && !current.Contains(r.Id.Key))
+                    .Select(r => r.Id.Key).ToList();
+                foreach (var key in gone) _results.Remove(key);
+            }
+            return _results.Values.Where(r => r.Id.Project == project).ToList();
+        }
+    }
+
+    /// <summary>UIDs of the known tests with these keys. Call under <see cref="_lock"/>.</summary>
+    private HashSet<string> UidsOf(IReadOnlySet<string> keys) =>
+        keys.Count == 0 ? [] : _results.Values.Where(r => keys.Contains(r.Id.Key)).Select(r => r.Id.Uid).ToHashSet(StringComparer.Ordinal);
 
     private async Task MarkStaleAsync(ProjectGraph graph, IReadOnlySet<string> dirty)
     {
