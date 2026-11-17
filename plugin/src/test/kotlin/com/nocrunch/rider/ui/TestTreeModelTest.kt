@@ -227,4 +227,29 @@ class TestTreeModelTest {
             assertEquals(null, it.shownOutcome, it.dto.method)
         }
     }
+
+    @Test
+    fun run_times_add_up_at_class_and_project_level() {
+        val timed = listOf(
+            t(unit, "A.Calc", "Adds", "passed").copy(durationMs = 120.0),
+            t(unit, "A.Calc", "Subtracts", "failed").copy(durationMs = 30.0),
+            t(unit, "A.Other", "Works", "stale").copy(durationMs = 850.0, lastOutcome = "passed"),
+            t(unit, "A.Other", "NeverRun", "queued").copy(durationMs = null),
+            t(unit, "A.Other", "Skipped", "excluded").copy(durationMs = 999.0),
+        )
+        val tree = TestTreeModel.build(timed, emptyMap(), listOf(ExclusionRuleDto(unit, "A.Other", "Skipped")), false).single()
+
+        assertEquals(150.0, tree.children.single { it.type == "A.Calc" }.durationMs)
+        assertEquals(850.0, tree.children.single { it.type == "A.Other" }.durationMs, "excluded (not run by hand) and unrun tests don't count")
+        assertEquals(1000.0, tree.durationMs)
+    }
+
+    @Test
+    fun durations_format_readably() {
+        assertEquals("0 ms", TestTreeModel.formatDuration(0.4))
+        assertEquals("850 ms", TestTreeModel.formatDuration(850.0))
+        assertEquals("2.4 s", TestTreeModel.formatDuration(2_400.0))
+        assertEquals("59.9 s", TestTreeModel.formatDuration(59_900.0))
+        assertEquals("1 m 05 s", TestTreeModel.formatDuration(65_000.0))
+    }
 }

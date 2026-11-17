@@ -313,6 +313,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         else -> SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
                     })
                     appendCounts(o.counts, o.excluded)
+                    appendDuration(o.durationMs)
                     appendFreshness(o.freshness)
                     appendManual(o.manualCount)
                     when {
@@ -332,6 +333,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
                     appendCounts(o.counts, o.excluded)
+                    appendDuration(o.durationMs)
                     appendFreshness(o.freshness)
                     appendManual(o.manualCount)
                 }
@@ -346,9 +348,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         o.shownOutcome == "failed" -> if (o.freshness == null) FAILED else STALE_FAILED
                         else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
                     })
-                    d.durationMs?.takeIf { o.shownOutcome != null }?.let {
-                        r.append("  ${"%.0f".format(it)} ms", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                    }
+                    d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
                     appendFreshness(o.freshness)
                     if (o.manual) r.append("  ▸ manual run", MANUAL)
                 }
@@ -381,6 +381,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 else -> return null
             }
             return if (fresh) icon else com.intellij.openapi.util.IconLoader.getTransparentIcon(icon, 0.45f)
+        }
+
+        private fun appendDuration(ms: Double?) {
+            if (ms != null) textRenderer.append("  ${TestTreeModel.formatDuration(ms)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
         }
 
         private fun appendFreshness(freshness: String?) {

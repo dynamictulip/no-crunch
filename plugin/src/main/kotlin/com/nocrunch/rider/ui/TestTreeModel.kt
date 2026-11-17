@@ -14,6 +14,9 @@ data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0
 
 /** [locked]: excluded by an ancestor's rule, so it can't be toggled on its own. */
 data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: Boolean = false) {
+    /** Run time that counts towards parents: excluded tests only count once run by hand. */
+    val countedDurationMs: Double? get() = if (excluded && !manual) null else dto.durationMs
+
     /** The result comes from a run the user asked for, not from continuous testing. */
     val manual: Boolean get() = dto.runKind == "manual"
 
@@ -46,6 +49,8 @@ data class TestNode(val dto: TestResultDto, val excluded: Boolean, val locked: B
 data class ClassNode(val project: String, val type: String, val excluded: Boolean, val children: List<TestNode>, val locked: Boolean = false) {
     val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
     val manualCount: Int get() = children.count { it.manual }
+    /** Total run time of the tests below, or null if none has run. */
+    val durationMs: Double? get() = children.mapNotNull { it.countedDurationMs }.takeIf { it.isNotEmpty() }?.sum()
     val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
     /** Why some results below aren't current: running, queued or stale; null when everything is current. */
     val freshness: String? get() = TestTreeModel.summarise(children.filterNot { it.excluded && !it.manual }.mapNotNull { it.freshness })
@@ -69,6 +74,7 @@ data class ProjectNode(
 ) {
     val counts: Counts get() = children.fold(Counts()) { acc, c -> acc + c.counts }
     val manualCount: Int get() = children.sumOf { it.manualCount }
+    val durationMs: Double? get() = children.mapNotNull { it.durationMs }.takeIf { it.isNotEmpty() }?.sum()
     val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
     val freshness: String? get() = TestTreeModel.summarise(children.mapNotNull { it.freshness })
     val isFresh: Boolean get() = freshness == null
@@ -125,6 +131,15 @@ object TestTreeModel {
         "running" in freshness -> "running"
         "queued" in freshness -> "queued"
         else -> "stale"
+    }
+
+    fun formatDuration(ms: Double): String = when {
+        ms < 1_000 -> "${ms.toLong()} ms"
+        ms < 60_000 -> String.format(java.util.Locale.ROOT, "%.1f s", ms / 1_000)
+        else -> {
+            val totalSeconds = (ms / 1_000).toLong()
+            String.format(java.util.Locale.ROOT, "%d m %02d s", totalSeconds / 60, totalSeconds % 60)
+        }
     }
 
     fun worst(outcomes: Collection<String>): String? = when {
