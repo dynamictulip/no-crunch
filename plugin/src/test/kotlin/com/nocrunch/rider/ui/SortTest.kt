@@ -1,5 +1,6 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.engine.BuildFinishedDto
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestResultDto
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -42,6 +43,19 @@ class SortTest {
         assertEquals(listOf("fail", "queued", "stale_pass", "pass_fast", "Excluded"), testOrder(SortMode.STATUS))
         assertEquals(listOf("N.Zeta", "N.alpha"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.STATUS).map { it.label })
         assertEquals(listOf(a, b), TreeView.sortProjects(projects(), SortMode.STATUS).map { it.path })
+    }
+
+    @Test
+    fun status_sort_puts_build_failures_above_test_failures() {
+        val broken = "src/Broken/Broken.csproj"
+        val blocked = "tests/Blocked/Blocked.csproj"
+        val builds = mapOf(
+            broken to BuildFinishedDto(broken, "failed", "error CS1002", null),
+            blocked to BuildFinishedDto(blocked, "blocked", "", broken),
+            b to BuildFinishedDto(b, "succeeded", "", null),
+        )
+        val withBuilds = TestTreeModel.build(tests, builds, rules, false)
+        assertEquals(listOf(broken, blocked, a, b), TreeView.sortProjects(withBuilds, SortMode.STATUS).map { it.path })
     }
 
     @Test

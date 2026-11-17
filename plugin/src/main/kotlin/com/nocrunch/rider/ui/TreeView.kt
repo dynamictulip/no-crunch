@@ -74,8 +74,18 @@ object TreeView {
         return sortViews(nodes, sort)
     }
 
-    fun sortProjects(projects: List<ProjectNode>, sort: SortMode): List<ProjectNode> =
-        projects.sortedWith(comparator(sort, { it.name }, { p -> p.children.flatMap { it.children } }, { it.durationMs }))
+    fun sortProjects(projects: List<ProjectNode>, sort: SortMode): List<ProjectNode> {
+        val byTests = comparator<ProjectNode>(sort, { it.name }, { p -> p.children.flatMap { it.children } }, { it.durationMs })
+        // Broken builds outrank any test result: failed builds first, then projects blocked by them.
+        return if (sort == SortMode.STATUS) projects.sortedWith(compareBy<ProjectNode> { buildRank(it.buildStatus) }.then(byTests))
+        else projects.sortedWith(byTests)
+    }
+
+    private fun buildRank(status: String?): Int = when (status) {
+        "failed" -> 0
+        "blocked" -> 1
+        else -> 2
+    }
 
     fun sortTests(tests: List<TestView>, sort: SortMode): List<TestView> =
         tests.sortedWith(comparator(sort, { it.label }, { it.leaves }, { it.node.countedDurationMs }))
