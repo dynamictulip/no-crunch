@@ -612,7 +612,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     when {
                         o.excluded -> r.append(o.name, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.name, if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD)
-                        else -> appendName(o.name, bold = true)
+                        else -> appendName(o.name, bold = true, parent = true)
                     }
                     if (o.isTestProject) {
                         appendCounts(o.counts, o.excluded)
@@ -634,7 +634,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     when {
                         o.excluded && o.manualCount == 0 -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.label, if (o.isFresh) FAILED else STALE_FAILED)
-                        else -> appendName(o.label)
+                        else -> appendName(o.label, parent = true)
                     }
                     appendCounts(o.counts, o.excluded)
                     appendDuration(o.durationMs)
@@ -667,10 +667,15 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             }
         }
 
-        /** Appends a name, colour-coded by part when that's switched on. Failed and excluded rows don't use this. */
-        private fun appendName(name: String, bold: Boolean = false) {
+        /**
+         * Appends a name, colour-coded by part when that's switched on. Failed and excluded rows don't use this.
+         * Only test names are ever snake case, so [parent] rows (projects, namespaces, classes, files) always split
+         * into PascalCase words.
+         */
+        private fun appendName(name: String, bold: Boolean = false, parent: Boolean = false) {
             val style = if (bold) SimpleTextAttributes.STYLE_BOLD else SimpleTextAttributes.STYLE_PLAIN
-            NameColouring.split(name, colouring()).forEach { (text, colour) ->
+            val mode = colouring().let { if (parent && it != NameColouring.OFF) NameColouring.PASCAL else it }
+            NameColouring.split(name, mode).forEach { (text, colour) ->
                 textRenderer.append(text, SimpleTextAttributes(style, colour?.let { NAME_PARTS[it] }))
             }
         }
