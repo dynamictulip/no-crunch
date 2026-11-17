@@ -508,6 +508,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         })
         add(DefaultActionGroup("View As", true).apply {
             templatePresentation.icon = AllIcons.Actions.GroupBy
+            addSeparator("Group By")
             ViewMode.entries.forEach { mode ->
                 add(object : ToggleAction(mode.title) {
                     override fun getActionUpdateThread() = ActionUpdateThread.EDT
