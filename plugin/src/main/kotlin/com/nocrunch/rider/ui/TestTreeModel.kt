@@ -160,10 +160,13 @@ object TestTreeModel {
                     val nodes = topLevel
                         .sortedWith(compareBy({ it.method ?: it.displayName }, { it.displayName }))
                         .map { d ->
-                            node(d).copy(rows = rowsByTheory[d.key].orEmpty().sortedBy { it.displayName }.map { node(it, isRow = true) })
+                            node(d).copy(rows = rowsByTheory[d.key].orEmpty().map { node(it, isRow = true) })
                         }
                         .let { groupListedRows(it, rules, classExcluded) }
-                        .map { n -> if (n.rows.isEmpty()) n else n.copy(rows = n.rows.map { r -> r.copy(argNames = paramNames(r.dto)) }) }
+                        .map { n ->
+                            if (n.rows.isEmpty()) n
+                            else n.copy(rows = n.rows.map { r -> r.copy(argNames = paramNames(r.dto)) }.sortedWith(compareBy(NaturalOrder) { it.label }))
+                        }
                         .filter { !failuresOnly || it.dto.state == "failed" }
                         .filter { !hideExcluded || !it.excluded }
                     ClassNode(path, type, classExcluded, nodes, parentExcluded = projectExcluded)
@@ -215,7 +218,7 @@ object TestTreeModel {
             lastOutcome = outcome,
             theoryKey = null,
         )
-        val rows = members.sortedBy { it.dto.displayName }.map { it.copy(locked = true, isRow = true) }
+        val rows = members.map { it.copy(locked = true, isRow = true) }
         return TestNode(dto, isExcluded(dto, rules), rows = rows, parentExcluded = classExcluded, grouped = true)
     }
 

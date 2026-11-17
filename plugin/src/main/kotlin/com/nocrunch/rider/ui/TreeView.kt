@@ -124,7 +124,7 @@ object TreeView {
     }
 
     private fun <T> comparator(sort: SortMode, name: (T) -> String, leaves: (T) -> List<TestNode>, duration: (T) -> Double?): Comparator<T> {
-        val byName = compareBy<T, String>(String.CASE_INSENSITIVE_ORDER) { name(it) }
+        val byName = compareBy<T, String>(NaturalOrder) { name(it) }
         return when (sort) {
             SortMode.NAME -> byName
             SortMode.STATUS -> compareBy<T> { leaves(it).minOfOrNull(::statusRank) ?: Int.MAX_VALUE }.then(byName)
