@@ -18,6 +18,8 @@ data class Counts(val passed: Int = 0, val failed: Int = 0, val pending: Int = 0
  * [parentExcluded]: its class is excluded, so "(excluded)" isn't worth repeating on it.
  * [rows]: data rows of a theory whose rows are only known once it runs (they share its UID); shown nested under it.
  * [isRow]: this node is one of those rows.
+ * [grouped]: made up by the tool window to hold data rows that were listed as separate tests (xUnit theories with
+ * serialisable data, MSTest `DataRow`s). The engine doesn't know its key; running it runs its rows.
  */
 data class TestNode(
     val dto: TestResultDto,
@@ -26,8 +28,11 @@ data class TestNode(
     val rows: List<TestNode> = emptyList(),
     val isRow: Boolean = false,
     val parentExcluded: Boolean = false,
+    val grouped: Boolean = false,
 ) {
-    /** Rows show just their arguments; everything else shows the full display name. */
+    /** Keys to ask the engine to run for this node. */
+    val runKeys: List<String> get() = if (grouped) rows.map { it.dto.key } else listOf(dto.key)
+
     /**
      * Rows show just their arguments. Everything else drops the class prefix some frameworks put in display names
      * (xUnit's `Namespace.Class.Method(...)`), since the class is already the row above.
@@ -153,6 +158,7 @@ object TestTreeModel {
                         .map { d ->
                             node(d).copy(rows = rowsByTheory[d.key].orEmpty().sortedBy { it.displayName }.map { node(it, isRow = true) })
                         }
+                        .let { groupListedRows(it, rules, classExcluded) }
                         .filter { !failuresOnly || it.dto.state == "failed" }
                         .filter { !hideExcluded || !it.excluded }
                     ClassNode(path, type, classExcluded, nodes, parentExcluded = projectExcluded)
@@ -165,6 +171,47 @@ object TestTreeModel {
             if (hideExcluded && classes.isEmpty() && byProject[path].orEmpty().isNotEmpty() && !buildBroken) return@mapNotNull null
             ProjectNode(path, shortName(path), build?.status, build, runs[path], projectExcluded, classes)
         }.sortedBy { it.name }
+    }
+
+    /**
+     * Tests that are data rows of one method, each listed as its own test (they all have a variant), nest under a
+     * made-up node named after the method, the same way rows only known at run time nest under their theory.
+     */
+    private fun groupListedRows(nodes: List<TestNode>, rules: List<ExclusionRuleDto>, classExcluded: Boolean): List<TestNode> {
+        val byMethod = nodes.filter { it.rows.isEmpty() && it.dto.method != null && it.dto.variant != null }.groupBy { it.dto.method }
+            .filterValues { it.size >= 2 }
+        if (byMethod.isEmpty()) return nodes
+        val grouped = byMethod.mapValues { (_, members) -> group(members, rules, classExcluded) }
+        val done = mutableSetOf<String?>()
+        return nodes.mapNotNull { n ->
+            val m = n.dto.method
+            when {
+                m !in grouped || n.rows.isNotEmpty() || n.dto.variant == null -> n
+                done.add(m) -> grouped.getValue(m)
+                else -> null
+            }
+        }
+    }
+
+    private fun group(members: List<TestNode>, rules: List<ExclusionRuleDto>, classExcluded: Boolean): TestNode {
+        val dtos = members.map { it.dto }
+        val first = dtos.first()
+        val outcome = worst(members.mapNotNull { it.shownOutcome })
+        val pending = listOf("running", "queued", "stale", "discovered", "excluded").firstOrNull { s -> dtos.any { it.state == s } }
+        val dto = first.copy(
+            key = "${first.project}|${first.type}|${first.method}|(rows)",
+            variant = null,
+            displayName = members.first().label.substringBefore('(').trim(),
+            state = if (dtos.any { it.state == "failed" }) "failed" else pending ?: outcome ?: first.state,
+            durationMs = dtos.mapNotNull { it.durationMs }.takeIf { it.isNotEmpty() }?.sum(),
+            message = null,
+            stackTrace = null,
+            runKind = if (dtos.any { it.runKind == "manual" }) "manual" else "auto",
+            lastOutcome = outcome,
+            theoryKey = null,
+        )
+        val rows = members.sortedBy { it.dto.displayName }.map { it.copy(locked = true, isRow = true) }
+        return TestNode(dto, isExcluded(dto, rules), rows = rows, parentExcluded = classExcluded, grouped = true)
     }
 
     fun shortName(path: String) = path.substringAfterLast('/').substringBeforeLast('.')

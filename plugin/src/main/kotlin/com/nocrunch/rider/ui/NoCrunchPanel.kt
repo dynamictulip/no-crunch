@@ -401,9 +401,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         val paths = tree.selectionPaths ?: return emptyList()
         return paths.flatMap { p ->
             when (val o = (p.lastPathComponent as CheckedTreeNode).userObject) {
-                is TestNode -> listOf(o.dto.key)
-                is ViewNode -> o.leaves.map { it.dto.key }
-                is ProjectNode -> o.children.flatMap { c -> c.children.map { it.dto.key } }
+                is TestNode -> o.runKeys
+                is ViewNode -> o.leaves.flatMap { it.runKeys }
+                is ProjectNode -> o.children.flatMap { c -> c.children.flatMap { it.runKeys } }
                 else -> emptyList()
             }
         }.distinct()
@@ -651,11 +651,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         else -> outcomeIcon(o.shownOutcome, o.freshness == null) ?: testIcon(d.state)
                     }
                     // Failed and excluded rows keep their red or grey; colour coding only applies to the rest.
-                    // Theory rows show data, not a name, so they're never split.
                     when {
                         o.excluded && !o.manual -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.label, if (o.freshness == null) FAILED else STALE_FAILED)
-                        o.isRow -> r.append(o.label, SimpleTextAttributes.REGULAR_ATTRIBUTES)
                         else -> appendName(o.label)
                     }
                     if (o.rows.isNotEmpty()) appendCounts(o.counts, o.excluded)

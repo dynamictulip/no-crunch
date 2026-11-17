@@ -20,7 +20,7 @@ class TheoryRowsTest {
         t(null, "failed"),
         t("N.C.Enrich_Line(scenario: \"no date\")", "passed", theory = theoryKey),
         t("N.C.Enrich_Line(scenario: \"day zero\")", "failed", theory = theoryKey),
-        // A theory whose rows were listed at discovery: separate UIDs, no placeholder. Stays flat.
+        // A theory whose rows were listed at discovery: separate UIDs, no placeholder. Nests under its method name.
         t("N.C.Other(x: 1)", "passed", uid = "u2", m = "Other(System.Int32)"),
         t("N.C.Other(x: 2)", "passed", uid = "u3", m = "Other(System.Int32)"),
     )
@@ -28,16 +28,39 @@ class TheoryRowsTest {
     @Test
     fun test_names_drop_the_class_prefix() {
         val cls = TestTreeModel.build(tests, emptyMap(), emptyList(), false).single().children.single()
-        assertEquals(listOf("Enrich_Line", "Other(x: 1)", "Other(x: 2)"), cls.children.map { it.label })
+        assertEquals(listOf("Enrich_Line", "Other"), cls.children.map { it.label })
     }
 
     @Test
     fun rows_reported_only_at_run_time_nest_under_their_theory() {
         val cls = TestTreeModel.build(tests, emptyMap(), emptyList(), false).single().children.single()
-        assertEquals(3, cls.children.size, "theory plus the two listed rows")
+        assertEquals(2, cls.children.size, "the theory and the listed rows' method")
         val theory = cls.children.single { it.dto.key == theoryKey }
         assertEquals(listOf("(scenario: \"day zero\")", "(scenario: \"no date\")"), theory.rows.map { it.label })
         assertEquals(Counts(passed = 1, failed = 1), theory.counts, "the theory counts its rows, not itself")
         assertEquals(Counts(passed = 3, failed = 1), cls.counts)
+    }
+
+    @Test
+    fun rows_listed_as_separate_tests_nest_under_their_method() {
+        val listed = listOf(
+            t("N.C.Other(x: 1)", "passed", uid = "u2", m = "Other(System.Int32)"),
+            t("N.C.Other(x: 2)", "failed", uid = "u3", m = "Other(System.Int32)"),
+            t("N.C.Other(x: 3)", "queued", uid = "u4", m = "Other(System.Int32)"),
+        )
+        val group = TestTreeModel.build(listed, emptyMap(), emptyList(), false).single().children.single().children.single()
+        assertEquals("Other", group.label)
+        assertEquals(listOf("(x: 1)", "(x: 2)", "(x: 3)"), group.rows.map { it.label })
+        assertEquals("failed", group.shownOutcome)
+        assertEquals(Counts(passed = 1, failed = 1, pending = 1), group.counts)
+        assertEquals(listed.map { it.key }, group.runKeys, "running the group runs its rows")
+        assertEquals(listOf(true, true, true), group.rows.map { it.locked && it.isRow })
+    }
+
+    @Test
+    fun a_single_listed_row_stays_flat() {
+        val one = listOf(t("N.C.Other(x: 1)", "passed", uid = "u2", m = "Other(System.Int32)"))
+        val cls = TestTreeModel.build(one, emptyMap(), emptyList(), false).single().children.single()
+        assertEquals(listOf("Other(x: 1)"), cls.children.map { it.label })
     }
 }
