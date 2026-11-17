@@ -606,8 +606,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             val r = textRenderer
             val editing = showCheckboxes()
             val obj = (value as? CheckedTreeNode)?.userObject
-            // Data rows use the editor's monospace font so their argument columns line up.
-            r.font = if ((obj as? TestNode)?.isRow == true) monospace(tree.font) else tree.font
+            // The editor's monospace font, so names read like code and data-row columns line up.
+            r.font = monospace(tree.font)
             // Build-error rows have nothing to include or exclude.
             // Theory rows follow their theory; they can't be included or excluded on their own.
             checkbox.isVisible = editing && obj !is BuildErrorsGroup && (obj as? ProjectNode)?.isTestProject != false &&
