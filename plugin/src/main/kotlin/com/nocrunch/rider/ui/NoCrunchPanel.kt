@@ -293,6 +293,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 last?.let(::render)
             }
         })
+        // Standard IntelliJ expand/collapse-all actions (same icons and shortcuts as other trees).
+        val expander = com.intellij.ide.DefaultTreeExpander(tree)
+        add(com.intellij.ide.CommonActionsManager.getInstance().createExpandAllAction(expander, tree))
+        add(com.intellij.ide.CommonActionsManager.getInstance().createCollapseAllAction(expander, tree))
         add(DefaultActionGroup("View As", true).apply {
             templatePresentation.icon = AllIcons.Actions.GroupBy
             ViewMode.entries.forEach { mode ->
