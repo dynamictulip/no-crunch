@@ -168,12 +168,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         }
     }
 
-    /** Based on every test, regardless of the "failures only" / "hide excluded" view filters. */
-    private fun barState(s: Snapshot): BarState {
-        val counts = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly = false, runs = s.runs)
-            .fold(Counts()) { acc, p -> acc + p.counts }
-        return ProgressBarModel.from(counts, s.state, s.builds.values.count { it.status == "failed" })
-    }
+    private fun barState(s: Snapshot): BarState = ProgressBarModel.forService(s.tests, s.builds, s.runs, s.rules, s.state)
 
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
         when (val o = (it as? CheckedTreeNode)?.userObject) {

@@ -13,7 +13,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <postStartupActivity implementation="com.nocrunch.rider.NoCrunchStartup"/>
         <toolWindow id="No Crunch" anchor="bottom" factoryClass="com.nocrunch.rider.ui.NoCrunchToolWindowFactory"
-                    icon="AllIcons.RunConfigurations.TestState.Run"/>
+                    icon="/icons/cupcake.svg"/>
         <statusBarWidgetFactory id="NoCrunchStatus" implementation="com.nocrunch.rider.ui.NoCrunchStatusBarWidgetFactory"/>
         <projectConfigurable parentId="tools" instance="com.nocrunch.rider.settings.NoCrunchConfigurable"
                              id="com.nocrunch.rider.settings" displayName="No Crunch"/>
