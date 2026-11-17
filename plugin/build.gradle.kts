@@ -22,6 +22,8 @@ repositories {
 dependencies {
     intellijPlatform {
         local(providers.environmentVariable("RIDER_PATH").orElse(System.getProperty("user.home") + "/Applications/Rider.app"))
+        // Rider's .NET run configurations implement an interface from this module (used to debug a test by name).
+        bundledModule("intellij.rider.debugger.shared")
         testFramework(TestFrameworkType.Platform)
     }
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")

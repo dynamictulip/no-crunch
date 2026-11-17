@@ -80,16 +80,16 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     /** Runs the selected tests now, including excluded ones; results are marked as a manual run. */
     /** Hands one test to Rider's own test runner to debug (its normal build, not the mirror). */
     private val debugTestAction: AnAction by lazy {
-        object : AnAction("Debug Test", "Debug this test with Rider's test runner", AllIcons.Actions.StartDebugger) {
+        object : AnAction("Debug Test", "Build and debug just this test in Rider", AllIcons.Actions.StartDebugger) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun update(e: AnActionEvent) {
                 val node = singleSelectedTest()
                 e.presentation.isVisible = node != null
-                e.presentation.isEnabled = node?.dto?.filePath != null && node.dto.line != null &&
-                    ActionManager.getInstance().getAction(RIDER_DEBUG_TEST_ACTION) != null
+                e.presentation.isEnabled = node != null &&
+                    ((node.dto.type != null && node.dto.method != null) || (node.dto.filePath != null && node.dto.line != null))
             }
             override fun actionPerformed(e: AnActionEvent) {
-                singleSelectedTest()?.let(::debugInRider)
+                singleSelectedTest()?.let(::debugTest)
             }
         }
     }
@@ -98,7 +98,29 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         tree.selectionPaths?.singleOrNull()?.let { (it.lastPathComponent as? CheckedTreeNode)?.userObject as? TestNode }
 
     /**
-     * Rider's "Debug" context action works out which test to debug from the editor caret, so open the test's file,
+     * Debugs the test by name with a run configuration filtered to it. If that isn't possible (no class/method, or
+     * Rider's run-configuration classes have changed), falls back to Rider's caret-based Debug action.
+     */
+    private fun debugTest(node: TestNode) {
+        val d = node.dto
+        val root = service.repoRoot
+        if (root != null && d.type != null && d.method != null) {
+            try {
+                val projectFile = java.nio.file.Path.of(root, d.project)
+                val args = com.nocrunch.rider.debug.TestFilter.args(com.nocrunch.rider.debug.TestFilter.detect(projectFile), d.type, d.method)
+                val name = "Debug ${d.type.substringAfterLast('.')}.${d.method.substringBefore('(')}"
+                com.nocrunch.rider.debug.RiderDebugLauncher.debug(project, projectFile, args, name)
+                return
+            } catch (e: Throwable) {
+                if (e is com.intellij.openapi.progress.ProcessCanceledException) throw e
+                LOG.warn("Debug Test by name failed for ${d.key}; falling back to Rider's caret-based action", e)
+            }
+        }
+        debugInRider(node)
+    }
+
+    /**
+     * Fallback: Rider's "Debug" context action works out which test to debug from the editor caret, so open the test's file,
      * put the caret on the test method's name, and run that action on the editor. The action is answered by Rider's
      * backend, which needs a moment to see the newly opened editor and caret, so keep trying for a few seconds.
      */
