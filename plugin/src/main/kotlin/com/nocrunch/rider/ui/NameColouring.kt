@@ -11,14 +11,15 @@ enum class NameColouring(val title: String) {
         const val COLOURS = 3
 
         /**
-         * Splits [name] into (text, colour index) segments. Underscores are separate segments with no colour.
+         * Splits [name] into (text, colour index) segments. Punctuation (`_`, `.`, `/` and so on) makes separate
+         * segments with no colour, so data-row arguments such as `(100,10,90)` get a colour per value.
          * Colour indexes cycle 0..[COLOURS]-1 across the parts that do get a colour.
          */
         fun split(name: String, mode: NameColouring): List<Pair<String, Int?>> {
             if (mode == OFF || name.isEmpty()) return listOf(name to null)
             val pieces = mutableListOf<Pair<String, Boolean>>() // text, isWord
-            for (chunk in Regex("_+|[^_]+").findAll(name).map { it.value }) {
-                if (chunk.startsWith('_')) pieces += chunk to false
+            for (chunk in Regex("[^\\p{L}\\p{N}]+|[\\p{L}\\p{N}]+").findAll(name).map { it.value }) {
+                if (!chunk.first().isLetterOrDigit()) pieces += chunk to false
                 else if (mode == SNAKE) pieces += chunk to true
                 else words(chunk).forEach { pieces += it to true }
             }

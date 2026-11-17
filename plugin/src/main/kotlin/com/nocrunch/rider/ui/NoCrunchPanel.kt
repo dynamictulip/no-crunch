@@ -609,11 +609,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         "building" -> AllIcons.Process.Step_1
                         else -> outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
                     }
-                    r.append(o.name, when {
-                        o.excluded -> SimpleTextAttributes.GRAYED_ATTRIBUTES
-                        o.shownOutcome == "failed" -> if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD
-                        else -> SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES
-                    })
+                    when {
+                        o.excluded -> r.append(o.name, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        o.shownOutcome == "failed" -> r.append(o.name, if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD)
+                        else -> appendName(o.name, bold = true)
+                    }
                     if (o.isTestProject) {
                         appendCounts(o.counts, o.excluded)
                         appendDuration(o.durationMs)
@@ -631,11 +631,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 }
                 is ViewNode -> {
                     r.icon = outcomeIcon(o.shownOutcome, o.isFresh) ?: stateIcon(o.counts)
-                    r.append(o.label, when {
-                        o.excluded && o.manualCount == 0 -> SimpleTextAttributes.GRAYED_ATTRIBUTES
-                        o.shownOutcome == "failed" -> if (o.isFresh) FAILED else STALE_FAILED
-                        else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
-                    })
+                    when {
+                        o.excluded && o.manualCount == 0 -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                        o.shownOutcome == "failed" -> r.append(o.label, if (o.isFresh) FAILED else STALE_FAILED)
+                        else -> appendName(o.label)
+                    }
                     appendCounts(o.counts, o.excluded)
                     appendDuration(o.durationMs)
                     appendFreshness(o.freshness)
@@ -649,15 +649,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                         o.excluded && !o.manual && o.shownOutcome == null -> AllIcons.RunConfigurations.TestUnknown
                         else -> outcomeIcon(o.shownOutcome, o.freshness == null) ?: testIcon(d.state)
                     }
-                    // Failed and excluded tests keep their red or grey; colour coding only applies to the rest.
+                    // Failed and excluded rows keep their red or grey; colour coding only applies to the rest.
                     // Theory rows show data, not a name, so they're never split.
                     when {
                         o.excluded && !o.manual -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
                         o.shownOutcome == "failed" -> r.append(o.label, if (o.freshness == null) FAILED else STALE_FAILED)
                         o.isRow -> r.append(o.label, SimpleTextAttributes.REGULAR_ATTRIBUTES)
-                        else -> NameColouring.split(o.label, colouring()).forEach { (text, colour) ->
-                            r.append(text, colour?.let { NAME_PARTS[it] } ?: SimpleTextAttributes.REGULAR_ATTRIBUTES)
-                        }
+                        else -> appendName(o.label)
                     }
                     if (o.rows.isNotEmpty()) appendCounts(o.counts, o.excluded)
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
@@ -666,6 +664,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     if (o.manual && !o.isRow) r.append("  ▸ manual run", MANUAL)
                     else if (o.excluded && !o.parentExcluded && !o.isRow && !editing) r.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 }
+            }
+        }
+
+        /** Appends a name, colour-coded by part when that's switched on. Failed and excluded rows don't use this. */
+        private fun appendName(name: String, bold: Boolean = false) {
+            val style = if (bold) SimpleTextAttributes.STYLE_BOLD else SimpleTextAttributes.STYLE_PLAIN
+            NameColouring.split(name, colouring()).forEach { (text, colour) ->
+                textRenderer.append(text, SimpleTextAttributes(style, colour?.let { NAME_PARTS[it] }))
             }
         }
 
@@ -682,7 +688,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 com.intellij.ui.JBColor(java.awt.Color(0x2F, 0x6F, 0xC9), java.awt.Color(0x6A, 0xA7, 0xF8)),
                 com.intellij.ui.JBColor(java.awt.Color(0x9A, 0x4F, 0x8E), java.awt.Color(0xC7, 0x7D, 0xBB)),
                 com.intellij.ui.JBColor(java.awt.Color(0x24, 0x87, 0x74), java.awt.Color(0x5F, 0xB8, 0xA6)),
-            ).map { SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, it) }
+            )
         }
 
         private fun appendCounts(c: Counts, excluded: Boolean) {

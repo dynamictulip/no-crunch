@@ -46,4 +46,17 @@ class NameColouringTest {
     @Test
     fun pascal_case_starting_lower_case() =
         assertEquals("total:0 Is:1 Zero:2", show("totalIsZero", NameColouring.PASCAL))
+
+    @Test
+    fun data_arguments_get_a_colour_per_value() =
+        assertEquals(
+            "off:0  (:- 100:1 ,:- 10:2 ,:- 90:0 ):-",
+            show("off (100,10,90)", NameColouring.SNAKE),
+        )
+
+    @Test
+    fun dots_and_slashes_separate_parts_like_underscores() {
+        assertEquals("Shop:0 .:- Catalog:1 .:- Tests:2", show("Shop.Catalog.Tests", NameColouring.SNAKE))
+        assertEquals("Pricing:0 /:- Rules:1 /:- Bulk:2 Discount:0", show("Pricing/Rules/BulkDiscount", NameColouring.PASCAL))
+    }
 }
