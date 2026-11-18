@@ -7,6 +7,9 @@ import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.StoragePathMacros
 import com.intellij.openapi.project.Project
+import com.nocrunch.rider.view.NameColouring
+import com.nocrunch.rider.view.SortMode
+import com.nocrunch.rider.view.ViewMode
 import java.io.File
 
 class NoCrunchSettingsState : BaseState() {
@@ -19,12 +22,12 @@ class NoCrunchSettingsState : BaseState() {
     var dotnetPath by string("")
     /** Tool window: hide excluded projects, classes and tests. */
     var hideExcluded by property(false)
-    /** Tool window grouping: a [com.nocrunch.rider.ui.ViewMode] name. */
-    var viewMode by string(com.nocrunch.rider.ui.ViewMode.CLASSES.name)
-    /** Tool window row order: a [com.nocrunch.rider.ui.SortMode] name. */
-    var sortMode by string(com.nocrunch.rider.ui.SortMode.NAME.name)
-    /** Tool window test-name colouring: a [com.nocrunch.rider.ui.NameColouring] name. */
-    var nameColouring by string(com.nocrunch.rider.ui.NameColouring.OFF.name)
+    /** Tool window grouping: a [ViewMode] name. */
+    var viewMode by string(ViewMode.DEFAULT.name)
+    /** Tool window row order: a [SortMode] name. */
+    var sortMode by string(SortMode.DEFAULT.name)
+    /** Tool window test-name colouring: a [NameColouring] name. */
+    var nameColouring by string(NameColouring.DEFAULT.name)
 }
 
 @Service(Service.Level.PROJECT)

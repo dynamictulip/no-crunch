@@ -251,12 +251,6 @@ class TestTreeModelTest {
     }
 
     @Test
-    fun excluded_keys_lists_every_excluded_test() {
-        val rules = listOf(ExclusionRuleDto(e2e), ExclusionRuleDto(unit, "A.Calc", "Adds"))
-        assertEquals(setOf("$e2e|B.Flow|Checkout", "$unit|A.Calc|Adds"), TestTreeModel.excludedKeys(tests, rules).toSet())
-    }
-
-    @Test
     fun excluded_tests_not_run_this_session_show_stale_with_no_outcome() {
         val tree = TestTreeModel.build(listOf(t(e2e, "B.Flow", "Checkout", TestState.EXCLUDED), t(e2e, "B.Flow", "Stored", TestState.STALE)),
             emptyMap(), listOf(ExclusionRuleDto(e2e)), false)

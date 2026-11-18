@@ -1,5 +1,7 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.SortMode
+import com.nocrunch.rider.view.ViewMode
 import com.nocrunch.rider.ProjectBuild
 import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.ExclusionRuleDto

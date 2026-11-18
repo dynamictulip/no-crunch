@@ -1,5 +1,8 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.NameColouring
+import com.nocrunch.rider.view.SortMode
+import com.nocrunch.rider.view.ViewMode
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
@@ -31,6 +34,7 @@ import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.EngineState
 import com.nocrunch.rider.engine.RunStatus
 import com.nocrunch.rider.engine.TestState
+import com.nocrunch.rider.exclusions.TestExclusions
 import com.nocrunch.rider.settings.NoCrunchConfigurable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -209,7 +213,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 val rules = when (val o = node.userObject) {
                     is ProjectNode -> listOf(o.rule)
                     is ViewNode -> o.rules
-                    is TestNode -> listOf(TestTreeModel.ruleFor(o.dto))
+                    is TestNode -> listOf(TestExclusions.ruleFor(o.dto))
                     else -> return
                 }
                 service.setExcluded(rules, excluded = !node.isChecked)
@@ -309,13 +313,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     }
 
     private val sortMode: SortMode
-        get() = SortMode.entries.firstOrNull { it.name == settings.state.sortMode } ?: SortMode.NAME
+        get() = SortMode.fromSetting(settings.state.sortMode)
 
     private val nameColouring: NameColouring
-        get() = NameColouring.entries.firstOrNull { it.name == settings.state.nameColouring } ?: NameColouring.OFF
+        get() = NameColouring.fromSetting(settings.state.nameColouring)
 
     private val viewMode: ViewMode
-        get() = ViewMode.entries.firstOrNull { it.name == settings.state.viewMode } ?: ViewMode.CLASSES
+        get() = ViewMode.fromSetting(settings.state.viewMode)
 
     /** The rows the tree should show. Broken non-test projects are pinned above the test projects whatever the sort. */
     private fun specs(model: List<ProjectNode>): List<TreeSpec> {
@@ -410,7 +414,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             when (val o = (p.lastPathComponent as? CheckedTreeNode)?.userObject) {
                 is ProjectNode -> if (o.isTestProject) o.excluded to listOf(o.rule) else null
                 is ViewNode -> if (o.locked) null else o.excluded to o.rules
-                is TestNode -> if (o.locked) null else o.excluded to listOf(TestTreeModel.ruleFor(o.dto))
+                is TestNode -> if (o.locked) null else o.excluded to listOf(TestExclusions.ruleFor(o.dto))
                 else -> null
             }
         }

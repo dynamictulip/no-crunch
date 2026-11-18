@@ -1,24 +1,13 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.SortMode
+import com.nocrunch.rider.view.ViewMode
 import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestState
-
-/** How tests are grouped under each project in the tool window. */
-enum class ViewMode(val title: String) {
-    CLASSES("Classes"),
-    NAMESPACES("Namespaces"),
-    FILES("Folders and files"),
-}
+import com.nocrunch.rider.exclusions.TestExclusions
 
 enum class GroupKind { NAMESPACE, FOLDER, FILE }
-
-/** Order of rows at every level of the tree. */
-enum class SortMode(val title: String) {
-    NAME("Name"),
-    STATUS("Status"),
-    DURATION("Run time"),
-}
 
 /**
  * A row below a project. Aggregates (counts, run time, freshness) are worked out from the tests underneath once, when
@@ -48,7 +37,7 @@ data class TestView(val node: TestNode) : ViewNode {
     override val label get() = node.label
     override val leaves = listOf(node)
     override val totals = Totals.of(leaves)
-    override val rules get() = listOf(TestTreeModel.ruleFor(node.dto))
+    override val rules get() = listOf(TestExclusions.ruleFor(node.dto))
     override val excluded get() = node.excluded
     override val locked get() = node.locked
     override val parentExcluded get() = node.parentExcluded

@@ -1,8 +1,10 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.NameColouring
 import com.nocrunch.rider.ProjectBuild
 import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.ExclusionRuleDto
+import com.nocrunch.rider.exclusions.TestExclusions
 import com.nocrunch.rider.engine.RunFinishedDto
 import com.nocrunch.rider.engine.RunKind
 import com.nocrunch.rider.engine.TestResultDto
@@ -133,7 +135,7 @@ data class ClassNode(
 
     /** Rules that toggling this node adds or removes. Tests without a class are excluded one by one (by UID), never the whole project. */
     val rules: List<ExclusionRuleDto>
-        get() = if (type == TestTreeModel.UNKNOWN_CLASS) children.map { TestTreeModel.ruleFor(it.dto) } else listOf(ExclusionRuleDto(project, type))
+        get() = if (type == TestTreeModel.UNKNOWN_CLASS) children.map { TestExclusions.ruleFor(it.dto) } else listOf(ExclusionRuleDto(project, type))
 }
 
 data class ProjectNode(
@@ -227,14 +229,14 @@ object TestTreeModel {
                 .toSortedMap()
                 .map { (type, members) ->
                     // Tests without a class have no class rule: that row is excluded when all of them are.
-                    val classExcluded = if (type == UNKNOWN_CLASS) members.isNotEmpty() && members.all { isExcluded(it, rules) }
+                    val classExcluded = if (type == UNKNOWN_CLASS) members.isNotEmpty() && members.all { TestExclusions.isExcluded(it, rules) }
                     else ExclusionRules.isExcluded(ExclusionRuleDto(path, type), rules)
                     // Data rows of theories whose rows were only known at run time nest under their theory.
                     val keys = members.map { it.key }.toSet()
                     val (rowDtos, topLevel) = members.partition { it.theoryKey != null && it.theoryKey in keys }
                     val rowsByTheory = rowDtos.groupBy { it.theoryKey }
                     fun node(d: TestResultDto, isRow: Boolean = false) =
-                        TestNode(d, isExcluded(d, rules), locked = isRow, isRow = isRow, parentExcluded = classExcluded)
+                        TestNode(d, TestExclusions.isExcluded(d, rules), locked = isRow, isRow = isRow, parentExcluded = classExcluded)
                     val nodes = topLevel
                         .sortedWith(compareBy({ it.method ?: it.displayName }, { it.displayName }))
                         .map { d ->
@@ -294,7 +296,7 @@ object TestTreeModel {
             theoryKey = null,
         )
         val rows = members.map { it.copy(locked = true, isRow = true) }
-        return TestNode(dto, isExcluded(dto, rules), rows = rows, parentExcluded = classExcluded, grouped = true)
+        return TestNode(dto, TestExclusions.isExcluded(dto, rules), rows = rows, parentExcluded = classExcluded, grouped = true)
     }
 
     fun shortName(path: String) = path.substringAfterLast('/').substringBeforeLast('.')
@@ -325,15 +327,4 @@ object TestTreeModel {
 
     /** Which not-yet-current state a group of listed data rows shows, most important first. */
     private val GROUP_PENDING_ORDER = listOf(TestState.RUNNING, TestState.QUEUED, TestState.STALE, TestState.DISCOVERED, TestState.EXCLUDED)
-
-    /** Keys of every known test that is currently excluded. */
-    fun excludedKeys(tests: Collection<TestResultDto>, rules: List<ExclusionRuleDto>): List<String> =
-        tests.filter { isExcluded(it, rules) }.map { it.key }
-
-    /** Same matching as the engine's ExclusionSet: the most specific rule wins, so include rules can override. */
-    fun isExcluded(t: TestResultDto, rules: List<ExclusionRuleDto>): Boolean =
-        ExclusionRules.isExcluded(ExclusionRuleDto(t.project, t.type, t.method, t.uid), rules)
-
-    fun ruleFor(t: TestResultDto): ExclusionRuleDto =
-        if (t.type != null && t.method != null) ExclusionRuleDto(t.project, t.type, t.method) else ExclusionRuleDto(t.project, uid = t.uid)
 }

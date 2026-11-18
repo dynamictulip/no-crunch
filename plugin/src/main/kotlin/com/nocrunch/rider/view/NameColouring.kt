@@ -1,4 +1,4 @@
-package com.nocrunch.rider.ui
+package com.nocrunch.rider.view
 
 /** How test names are split into parts that get alternating colours in the tool window. */
 enum class NameColouring(val title: String) {
@@ -7,6 +7,11 @@ enum class NameColouring(val title: String) {
     PASCAL("Pascal Case Words");
 
     companion object {
+        val DEFAULT = OFF
+
+        /** The option saved as [name], or [DEFAULT] if none is saved or it's no longer known. Settings save it by enum name. */
+        fun fromSetting(name: String?): NameColouring = entries.firstOrNull { it.name == name } ?: DEFAULT
+
         /** Number of colours the parts cycle through. */
         const val COLOURS = 3
 

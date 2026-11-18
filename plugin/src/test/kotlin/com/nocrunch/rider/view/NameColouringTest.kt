@@ -1,4 +1,4 @@
-package com.nocrunch.rider.ui
+package com.nocrunch.rider.view
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test

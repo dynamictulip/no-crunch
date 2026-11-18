@@ -1,5 +1,6 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.ViewMode
 import com.nocrunch.rider.engine.TestState
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestResultDto
