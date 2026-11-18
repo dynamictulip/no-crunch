@@ -9,6 +9,7 @@ namespace NoCrunch.Engine.Core;
 /// <summary>
 /// Turns file changes into build + test cycles: debounces bursts, cancels a running cycle when new work arrives
 /// (merging its work into the next cycle), runs failing projects first, and persists results.
+/// What a cycle builds and tests is worked out by <see cref="CyclePlanner"/>; test results are kept by <see cref="ResultBook"/>.
 /// </summary>
 public sealed class EngineCore(
     IWorkspaceStrategy workspace,
@@ -32,7 +33,7 @@ public sealed class EngineCore(
     private ExclusionSet _exclusions = ExclusionSet.Empty;
     private ProjectGraph? _graph;
     /// <summary>Projects the running cycle builds, tests or builds against; null until it has worked them out.</summary>
-    private HashSet<string>? _cycleProjects;
+    private IReadOnlySet<string>? _cycleProjects;
     private bool _paused;
     private Task? _loop;
     private TimeSpan? _nextRetry;
@@ -231,7 +232,7 @@ public sealed class EngineCore(
         if (p.FilesRel.Any(f => ProjectGraph.IsGraphFile(f) || Path.GetFileName(f) == ".gitignore")) return true;
         var touched = graph.DirtyProjects(p.FilesRel).ToHashSet(StringComparer.Ordinal);
         touched.UnionWith(p.Projects);
-        touched.UnionWith(p.ManualKeys.Concat(p.RerunKeys).Select(ProjectOfKey).OfType<string>());
+        touched.UnionWith(p.ManualKeys.Concat(p.RerunKeys).Select(CyclePlanner.ProjectOfKey).OfType<string>());
         return touched.Overlaps(running);
     }
 
@@ -243,7 +244,7 @@ public sealed class EngineCore(
 
     private async Task RunCycleAsync(Pending snap, CancellationToken ct)
     {
-        var dirty = new HashSet<string>(snap.Projects, StringComparer.Ordinal);
+        CyclePlan? plan = null;
         var needGraph = snap.NeedGraph;
         var restore = snap.Restore;
         // Every change copied into the mirror is recorded here as it happens. If this cycle is cancelled or fails,
@@ -275,43 +276,21 @@ public sealed class EngineCore(
             }
             var graph = _graph!;
 
-            dirty.UnionWith(graph.DirtyProjects(synced));
-            if (snap.All) dirty.UnionWith(graph.Projects.Select(p => p.RepoRelativePath));
-            var runKeys = snap.ManualKeys.Concat(snap.RerunKeys).ToHashSet(StringComparer.Ordinal);
-            var manualProjects = runKeys.Select(ProjectOfKey).OfType<string>().Where(p => graph.Find(p) is not null).ToHashSet(StringComparer.Ordinal);
-            var manualOnly = manualProjects.Where(p => !dirty.Contains(p)).ToHashSet(StringComparer.Ordinal);
-            dirty.UnionWith(manualProjects);
-
-            // Test projects excluded as a whole aren't built or run, unless a test in them was asked for by hand.
-            HashSet<string> skipped;
-            lock (_lock)
-                skipped = graph.Projects
-                    .Where(p => p.IsTestProject && _exclusions.ExcludesWholeProject(p.RepoRelativePath) && !manualProjects.Contains(p.RepoRelativePath))
-                    .Select(p => p.RepoRelativePath).ToHashSet(StringComparer.Ordinal);
-            dirty.ExceptWith(skipped);
-            // From here the changed files, "run all" and the requested tests are all accounted for in dirty.
-            progress.Planned = true;
-
-            if (dirty.Count == 0)
+            ExclusionSet exclusions;
+            lock (_lock) exclusions = _exclusions;
+            plan = CyclePlanner.Plan(new CycleRequest(snap.Projects, synced, snap.All, snap.ManualKeys, snap.RerunKeys),
+                graph, exclusions, _unhealthy, _builtThisSession, _results.FailingProjects());
+            if (plan.IsEmpty)
             {
                 await events.StateChanged(EngineState.Idle, 0);
                 return;
             }
+            lock (_lock) _cycleProjects = plan.CycleProjects;
 
-            // Projects that failed earlier get another go, with their dependents; references not yet built
-            // this session are included so a project never builds against missing outputs.
-            dirty.UnionWith(graph.WithDependents(_unhealthy));
-            dirty.ExceptWith(skipped);
-            var closure = graph.WithReferences(dirty);
-            dirty.UnionWith(closure.Where(p => _unhealthy.Contains(p) || !_builtThisSession.Contains(p)));
-            // What this cycle builds and tests, and what it builds against: new work touching these interrupts it.
-            lock (_lock) _cycleProjects = closure.Concat(dirty).ToHashSet(StringComparer.Ordinal);
-
-            var previouslyFailing = _results.FailingProjects();
-            var stale = _results.MarkStale(dirty.Where(p => !manualOnly.Contains(p)).ToHashSet(StringComparer.Ordinal));
+            var stale = _results.MarkStale(plan.Stale);
             if (stale.Count > 0) await events.TestResults(stale);
-            await events.StateChanged(EngineState.Building, dirty.Count);
-            var outcomes = await build.BuildAsync(graph.InBuildOrder(dirty),
+            await events.StateChanged(EngineState.Building, plan.Build.Count);
+            var outcomes = await build.BuildAsync(graph.InBuildOrder(plan.Build),
                 p => events.ProjectBuildStarted(p.RepoRelativePath),
                 async outcome =>
                 {
@@ -331,30 +310,24 @@ public sealed class EngineCore(
             foreach (var (project, outcome) in outcomes)
                 if (outcome.Status is not (BuildStatus.Succeeded or BuildStatus.Cancelled)) _unhealthy.Add(project);
 
-            var testProjects = graph.InBuildOrder(dirty).Where(p => p.IsTestProject).ToList();
-            foreach (var p in testProjects.Where(p => !p.IsMtp))
+            foreach (var p in plan.TestProjects.Where(p => !p.IsMtp))
             {
                 await events.ProjectRunFinished(new ProjectRunOutcome(p.RepoRelativePath, ProjectRunStatus.UnsupportedNotMtp,
                     "Not a Microsoft.Testing.Platform test project (VSTest is not supported yet)."));
                 lock (_lock) progress.Done.Add(p.RepoRelativePath);
             }
 
-            var runnable = testProjects
-                .Where(p => p.IsMtp && outcomes.GetValueOrDefault(p.RepoRelativePath)?.Status == BuildStatus.Succeeded)
-                .Where(p => !graph.WithReferences([p.RepoRelativePath]).Any(_unhealthy.Contains))
-                .OrderByDescending(p => previouslyFailing.Contains(p.RepoRelativePath))
-                .ThenBy(p => p.RepoRelativePath, StringComparer.Ordinal)
-                .ToList();
+            var runnable = CyclePlanner.RunOrder(plan, graph, outcomes, _unhealthy);
 
             await events.StateChanged(EngineState.Testing, runnable.Count);
             if (MaxParallelTestProjects <= 1)
             {
-                foreach (var p in runnable) await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), progress, ct);
+                foreach (var p in runnable) await RunProjectAsync(p, plan, snap.ManualKeys, progress, ct);
             }
             else
             {
                 await Parallel.ForEachAsync(runnable, new ParallelOptions { MaxDegreeOfParallelism = MaxParallelTestProjects, CancellationToken = ct },
-                    async (p, token) => await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), progress, token));
+                    async (p, token) => await RunProjectAsync(p, plan, snap.ManualKeys, progress, token));
             }
             ct.ThrowIfCancellationRequested();
 
@@ -369,11 +342,11 @@ public sealed class EngineCore(
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            Requeue(snap, dirty, synced, needGraph, restore, progress);
+            Requeue(snap, plan, synced, needGraph, restore, progress);
         }
         catch (Exception ex)
         {
-            Requeue(snap, dirty, synced, needGraph, restore, progress);
+            Requeue(snap, plan, synced, needGraph, restore, progress);
             var delay = _nextRetry ?? RetryDelay;
             _nextRetry = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, TimeSpan.FromMinutes(5).Ticks));
             await events.Log("error", $"Cycle failed; retrying in {delay.TotalSeconds:0.#}s: " + map.RewriteText(ex.ToString()));
@@ -387,25 +360,24 @@ public sealed class EngineCore(
     {
         /// <summary>The changed files are in the mirror and the workspace is initialised.</summary>
         public bool Synced;
-        /// <summary>Everything asked for has been turned into the cycle's set of dirty projects.</summary>
-        public bool Planned;
         /// <summary>Projects with nothing left to do: built (non-test projects) or with their tests run.</summary>
         public HashSet<string> Done { get; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>Hands everything an interrupted or failed cycle had not finished to the next cycle.</summary>
-    private void Requeue(Pending snap, IEnumerable<string> dirty, IEnumerable<string> synced, bool needGraph, bool restore,
+    /// <param name="plan">The cycle's plan, or null if it stopped before planning.</param>
+    private void Requeue(Pending snap, CyclePlan? plan, IEnumerable<string> synced, bool needGraph, bool restore,
         CycleProgress progress)
     {
         lock (_lock)
         {
             var done = progress.Done;
-            _pending.Projects.UnionWith(dirty.Where(p => !done.Contains(p)));
-            // Once planned, the changed files, "run all" and the requested tests are already reflected in dirty.
-            bool StillWanted(string key) => !progress.Planned || (ProjectOfKey(key) is { } p && !done.Contains(p));
+            _pending.Projects.UnionWith((plan?.Build ?? snap.Projects).Where(p => !done.Contains(p)));
+            // Once planned, the changed files, "run all" and the requested tests are already reflected in the plan.
+            bool StillWanted(string key) => plan is null || (CyclePlanner.ProjectOfKey(key) is { } p && !done.Contains(p));
             _pending.ManualKeys.UnionWith(snap.ManualKeys.Where(StillWanted));
             _pending.RerunKeys.UnionWith(snap.RerunKeys.Where(StillWanted));
-            if (!progress.Planned)
+            if (plan is null)
             {
                 _pending.SyncedRel.UnionWith(synced);
                 _pending.All |= snap.All;
@@ -422,13 +394,13 @@ public sealed class EngineCore(
         }
     }
 
-    /// <param name="runKeys">Tests to run even if excluded: manual runs plus re-included tests.</param>
-    /// <param name="manualKeys">The subset the user asked to run; their results are tagged <see cref="RunKind.Manual"/>.</param>
-    private async Task RunProjectAsync(ProjectInfo project, IReadOnlySet<string> runKeys, IReadOnlySet<string> manualKeys,
-        bool manualOnly, CycleProgress progress, CancellationToken ct)
+    /// <param name="manualKeys">The tests the user asked to run; their results are tagged <see cref="RunKind.Manual"/>.</param>
+    private async Task RunProjectAsync(ProjectInfo project, CyclePlan plan, IReadOnlySet<string> manualKeys,
+        CycleProgress progress, CancellationToken ct)
     {
         var first = true;
-        var run = _results.StartRun(project.RepoRelativePath, runKeys, manualKeys, manualOnly);
+        var manualOnly = plan.ManualOnly.Contains(project.RepoRelativePath);
+        var run = _results.StartRun(project.RepoRelativePath, plan.RunKeys, manualKeys, manualOnly);
         var outcome = await tests.RunAsync(project,
             id =>
             {
@@ -459,9 +431,6 @@ public sealed class EngineCore(
         if (!ct.IsCancellationRequested && outcome.Status != ProjectRunStatus.Cancelled)
             lock (_lock) progress.Done.Add(project.RepoRelativePath);
     }
-
-    /// <summary>The project part of a <see cref="TestId.Key"/>, or null if the key is malformed (it then matches no test).</summary>
-    private static string? ProjectOfKey(string key) => key.IndexOf('|') is var i and >= 0 ? key[..i] : null;
 
     private sealed class Pending
     {
