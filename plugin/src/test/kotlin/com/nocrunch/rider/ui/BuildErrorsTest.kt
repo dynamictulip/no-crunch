@@ -33,6 +33,22 @@ class BuildErrorsTest {
     }
 
     @Test
+    fun test_projects_stay_test_projects_when_view_filters_hide_all_their_tests() {
+        val builds = mapOf(
+            core to BuildFinishedDto(core, "failed", "error", null),
+            brokenTests to BuildFinishedDto(brokenTests, "failed", "error", null),
+        )
+        val tests = listOf(t(brokenTests, "b"))
+        for ((failuresOnly, hideExcluded) in listOf(true to false, false to true)) {
+            val rules = if (hideExcluded) listOf(com.nocrunch.rider.engine.ExclusionRuleDto(brokenTests)) else emptyList()
+            val (errors, testProjects) = TreeView.splitBuildErrors(
+                TestTreeModel.build(tests, builds, rules, failuresOnly, hideExcluded = hideExcluded))
+            assertEquals(listOf(core), errors.map { it.path }, "failuresOnly=$failuresOnly hideExcluded=$hideExcluded")
+            assertEquals(listOf(brokenTests), testProjects.map { it.path }, "failuresOnly=$failuresOnly hideExcluded=$hideExcluded")
+        }
+    }
+
+    @Test
     fun blocked_projects_name_the_project_that_blocks_them() {
         assertEquals("Shop.Core", projects.single { it.path == coreTests }.blockedByName)
     }

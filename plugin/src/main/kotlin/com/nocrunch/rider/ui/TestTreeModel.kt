@@ -120,6 +120,8 @@ data class ProjectNode(
     val run: RunFinishedDto?,
     val excluded: Boolean,
     val children: List<ClassNode>,
+    /** The engine knows tests in it, whether or not the view filters show any of them. */
+    val hasTests: Boolean = children.isNotEmpty(),
 ) {
     val counts: Counts get() = children.fold(Counts()) { acc, c -> acc + c.counts }
     val manualCount: Int get() = children.sumOf { it.manualCount }
@@ -128,8 +130,11 @@ data class ProjectNode(
     val freshness: String? get() = TestTreeModel.summarise(children.mapNotNull { it.freshness })
     val isFresh: Boolean get() = freshness == null
     val rule: ExclusionRuleDto get() = ExclusionRuleDto(path)
-    /** False for library/app projects that only appear because their build broke: no tests found and never run. */
-    val isTestProject: Boolean get() = children.isNotEmpty() || run != null
+    /**
+     * False for library/app projects that only appear because their build broke: no tests found and never run.
+     * Based on every test, not the filtered [children], so filters don't move a test project into "Build errors".
+     */
+    val isTestProject: Boolean get() = hasTests || run != null
     /** Short name of the project whose broken build stops this one, if any. */
     val blockedByName: String? get() = build?.blockedBy?.let(TestTreeModel::shortName)
 }
@@ -188,7 +193,8 @@ object TestTreeModel {
             val buildBroken = build?.status in setOf("failed", "blocked")
             if (failuresOnly && classes.isEmpty() && !buildBroken) return@mapNotNull null
             if (hideExcluded && classes.isEmpty() && byProject[path].orEmpty().isNotEmpty() && !buildBroken) return@mapNotNull null
-            ProjectNode(path, shortName(path), build?.status, build, runs[path], projectExcluded, classes)
+            ProjectNode(path, shortName(path), build?.status, build, runs[path], projectExcluded, classes,
+                hasTests = byProject[path].orEmpty().isNotEmpty())
         }.sortedBy { it.name }
     }
 
