@@ -48,8 +48,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     // No automatic parent/child propagation: each click maps to exactly one change in the exclusion rules.
     /** Checkboxes only show while choosing which tests run automatically (ticked = runs). */
     private var choosingTests = false
-    /** Some test shown in the tree is failing (used to drop the green tick highlights). */
-    private val anyFailures: Boolean get() = lastModel.any { it.counts.failed > 0 }
+    /** Some test shown in the tree is failing (used to drop the green tick highlights). Set once per model, not per painted row. */
+    private var anyFailures = false
     private val tree = CheckboxTree(Renderer({ choosingTests }, { nameColouring }, { anyFailures }), root, CheckboxTreeBase.CheckPolicy(false, false, false, false))
     private val details = DetailsPane(project, parent)
     private val bar = ProgressBar()
@@ -278,8 +278,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private fun render(s: Snapshot) {
         last = s
-        val model = TestTreeModel.build(s.tests.values, s.builds, s.rules, failuresOnly, s.runs, settings.state.hideExcluded, ::paramNames)
-        bar.update(barState(s))
+        // One build serves the bar (every test) and the tree (filtered).
+        val full = TestTreeModel.buildAll(s.tests.values, s.builds, s.rules, s.runs, ::paramNames)
+        val model = TestTreeModel.filter(full, failuresOnly, settings.state.hideExcluded)
+        bar.update(ProgressBarModel.forModel(full, s.builds, s.state))
         // While paused, results can't be trusted, so hide them behind a big Resume button.
         val paused = s.state.state == "paused"
         if (paused) waitingLabel.text = StatusText.waiting(s.state.queued)
@@ -287,6 +289,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         tree.emptyText.text = StatusText.emptyTree(s.state)
         if (model == lastModel) return
         lastModel = model
+        anyFailures = model.any { it.counts.failed > 0 }
         val expanded = TreeUtil.collectExpandedPaths(tree).map { pathKey(it) }.toSet()
         val selected = tree.selectionPath?.let { pathKey(it) }
         rebuilding = true
@@ -340,8 +343,6 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             v.children.forEach { add(treeNode(it)) }
         }
     }
-
-    private fun barState(s: Snapshot): BarState = ProgressBarModel.forService(s.tests, s.builds, s.runs, s.rules, s.state)
 
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
         when (val o = (it as? CheckedTreeNode)?.userObject) {

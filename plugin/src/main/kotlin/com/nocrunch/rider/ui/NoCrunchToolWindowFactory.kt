@@ -14,7 +14,7 @@ class NoCrunchToolWindowFactory : ToolWindowFactory, DumbAware {
         val service = com.nocrunch.rider.NoCrunchService.getInstance(toolWindow.project)
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.EDT) {
             kotlinx.coroutines.flow.combine(service.tests, service.builds, service.runs, service.exclusions, service.state) { t, b, r, e, s ->
-                CupcakeIcon.variantFor(ProgressBarModel.forService(t, b, r, e, s).colour, paused = s.state == "paused")
+                CupcakeIcon.variantFor(ProgressBarModel.forModel(TestTreeModel.buildAll(t.values, b, e, r), b, s).colour, paused = s.state == "paused")
             }.distinctUntilChanged().collect { toolWindow.setIcon(it.icon) }
         }
     }

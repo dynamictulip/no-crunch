@@ -10,18 +10,17 @@ data class BarState(val colour: BarColour, val fraction: Double, val text: Strin
 object ProgressBarModel {
     private val BUSY = setOf("starting", "syncing", "building", "testing")
 
-    /** Based on every test, regardless of the "failures only" / "hide excluded" view filters. */
-    fun forService(
-        tests: Map<String, com.nocrunch.rider.engine.TestResultDto>,
+    /** [projects] is the model built without the "failures only" / "hide excluded" view filters: the bar counts every test. */
+    fun forModel(
+        projects: List<ProjectNode>,
         builds: Map<String, com.nocrunch.rider.engine.BuildFinishedDto>,
-        runs: Map<String, com.nocrunch.rider.engine.RunFinishedDto>,
-        rules: List<com.nocrunch.rider.engine.ExclusionRuleDto>,
         state: EngineUiState,
-    ): BarState {
-        val counts = TestTreeModel.build(tests.values, builds, rules, failuresOnly = false, runs = runs)
-            .fold(Counts()) { acc, p -> acc + p.counts }
-        return from(counts, state, builds.values.count { it.status == "failed" })
-    }
+    ): BarState = from(totals(projects), state, brokenBuilds(builds))
+
+    /** Counts of every test in an unfiltered model, the same way the tree counts them. */
+    fun totals(projects: List<ProjectNode>): Counts = projects.fold(Counts()) { acc, p -> acc + p.counts }
+
+    fun brokenBuilds(builds: Map<String, com.nocrunch.rider.engine.BuildFinishedDto>): Int = builds.values.count { it.status == "failed" }
 
     fun from(counts: Counts, state: EngineUiState, brokenBuilds: Int): BarState {
         val done = counts.passed + counts.failed
