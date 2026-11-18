@@ -70,6 +70,10 @@ tasks.withType<org.jetbrains.intellij.platform.gradle.tasks.PrepareSandboxTask>(
 
 tasks.test {
     useJUnitPlatform()
+    // Exclusion-rule cases shared with the engine's tests (see ExclusionRulesTest).
+    val exclusionCases = rootDir.resolve("../testdata/exclusions.json")
+    inputs.file(exclusionCases).withPropertyName("exclusionCases").withPathSensitivity(PathSensitivity.NONE)
+    systemProperty("nocrunch.exclusionCases", exclusionCases.absolutePath)
 }
 
 // `./gradlew runIde -PopenSolution=/path/to/My.slnx` opens a solution in the sandbox IDE.

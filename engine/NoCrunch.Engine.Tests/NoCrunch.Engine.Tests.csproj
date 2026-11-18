@@ -8,4 +8,8 @@
   <ItemGroup>
     <ProjectReference Include="../NoCrunch.Engine/NoCrunch.Engine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Exclusion-rule cases shared with the plugin's tests (see ExclusionSetTests). -->
+    <None Include="../../testdata/exclusions.json" Link="testdata/exclusions.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

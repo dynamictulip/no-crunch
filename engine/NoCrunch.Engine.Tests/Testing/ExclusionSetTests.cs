@@ -1,3 +1,4 @@
+using System.Text.Json;
 using NoCrunch.Engine.Testing;
 
 namespace NoCrunch.Engine.Tests.Testing;
@@ -8,71 +9,74 @@ public class ExclusionSetTests
     private const string E2E = "tests/E2E/E2E.csproj";
     private const string Unit = "tests/Unit/Unit.csproj";
 
-    private static TestId T(string project, string type, string method, string uid = "u1") => new(project, type, method, uid);
+    // ---- Shared cases: testdata/exclusions.json at the repo root, also run by the plugin's ExclusionRulesTest ----
+
+    private sealed record CaseFile(string About, List<Case> Cases);
+    private sealed record Case(string Name, List<CaseRule> Rules, List<CaseTest> Tests);
+    private sealed record CaseRule(string Project, string? Type, string? Method, string? Uid, bool Include = false);
+    private sealed record CaseTest(string Project, string? Type, string? Method, string Uid, string? Variant, bool Excluded);
+
+    /// <summary>Copied next to the test assembly by the csproj.</summary>
+    private static readonly Lazy<IReadOnlyDictionary<string, Case>> SharedCases = new(() =>
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "testdata", "exclusions.json");
+        var file = JsonSerializer.Deserialize<CaseFile>(File.ReadAllText(path), new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                   ?? throw new InvalidDataException($"{path} is empty");
+        return file.Cases.ToDictionary(c => c.Name);
+    });
+
+    public static IEnumerable<TestDataRow<string>> SharedCaseNames =>
+        SharedCases.Value.Keys.Select(name => new TestDataRow<string>(name) { DisplayName = name });
 
     [TestMethod]
-    public void Project_rule_excludes_all_in_project()
+    [DynamicData(nameof(SharedCaseNames))]
+    public void Shared_case(string name)
+    {
+        var c = SharedCases.Value[name];
+        var set = new ExclusionSet(c.Rules.Select(r => new ExclusionRule(r.Project, r.Type, r.Method, r.Uid, r.Include)));
+
+        var wrong = c.Tests
+            .Where(t => set.IsExcluded(new TestId(t.Project, t.Type, t.Method, t.Uid, t.Variant)) != t.Excluded)
+            .Select(t => $"  {t} should{(t.Excluded ? "" : " not")} be excluded")
+            .ToList();
+        Assert.IsEmpty(wrong, $"'{name}':\n{string.Join("\n", wrong)}");
+    }
+
+    [TestMethod]
+    public void Shared_cases_are_loaded() => Assert.IsGreaterThan(10, SharedCases.Value.Count);
+
+    // ---- Engine-only: the plugin has no equivalent of ExcludesWholeProject ----
+
+    [TestMethod]
+    public void Project_rule_excludes_whole_project()
     {
         var set = new ExclusionSet([new ExclusionRule(E2E, null, null, null)]);
-        Assert.IsTrue(set.IsExcluded(T(E2E, "A.Flow", "Checkout")));
-        Assert.IsTrue(set.IsExcluded(new TestId(E2E, null, null, "x")));
-        Assert.IsFalse(set.IsExcluded(T(Unit, "A.Flow", "Checkout")));
+        Assert.IsTrue(set.ExcludesWholeProject(E2E));
+        Assert.IsFalse(set.ExcludesWholeProject(Unit));
     }
 
     [TestMethod]
-    public void Type_rule_excludes_class_only()
+    public void Class_or_test_rules_alone_do_not_exclude_whole_project()
     {
-        var set = new ExclusionSet([new ExclusionRule(Unit, "A.Slow", null, null)]);
-        Assert.IsTrue(set.IsExcluded(T(Unit, "A.Slow", "One")));
-        Assert.IsFalse(set.IsExcluded(T(Unit, "A.Fast", "One")));
-        Assert.IsFalse(set.IsExcluded(T(Unit, "A.SlowTests", "One")));
+        var set = new ExclusionSet([new ExclusionRule(Unit, "A.C", null, null), new ExclusionRule(Unit, "A.D", "One", null)]);
+        Assert.IsFalse(set.ExcludesWholeProject(Unit));
     }
 
     [TestMethod]
-    public void Include_rule_inside_an_excluded_parent_brings_that_test_back()
+    public void Any_include_rule_inside_stops_project_being_wholly_excluded()
     {
-        var set = new ExclusionSet([
-            new ExclusionRule(Unit, null, null, null),
-            new ExclusionRule(Unit, "A.C", null, null, Include: true),
-            new ExclusionRule(Unit, "A.C", "Slow", null),
-        ]);
-        Assert.IsTrue(set.IsExcluded(T(Unit, "A.Other", "One")), "project rule still applies elsewhere");
-        Assert.IsFalse(set.IsExcluded(T(Unit, "A.C", "One")), "class include beats project exclude");
-        Assert.IsTrue(set.IsExcluded(T(Unit, "A.C", "Slow")), "method exclude beats class include");
+        var set = new ExclusionSet([new ExclusionRule(Unit, null, null, null), new ExclusionRule(Unit, null, null, "u1", Include: true)]);
+        Assert.IsFalse(set.ExcludesWholeProject(Unit));
     }
 
     [TestMethod]
-    public void Include_rule_alone_excludes_nothing()
+    public void Project_match_is_case_sensitive() =>
+        Assert.IsFalse(new ExclusionSet([new ExclusionRule(Unit, null, null, null)]).ExcludesWholeProject(Unit.ToLowerInvariant()));
+
+    [TestMethod]
+    public void Empty_excludes_nothing()
     {
-        var set = new ExclusionSet([new ExclusionRule(Unit, "A.C", "One", null, Include: true)]);
-        Assert.IsFalse(set.IsExcluded(T(Unit, "A.C", "One")));
+        Assert.IsFalse(ExclusionSet.Empty.IsExcluded(new TestId(Unit, "A", "B", "u1")));
+        Assert.IsFalse(ExclusionSet.Empty.ExcludesWholeProject(Unit));
     }
-
-    [TestMethod]
-    public void Method_rule_excludes_single_test()
-    {
-        var set = new ExclusionSet([new ExclusionRule(Unit, "A.C", "One", null)]);
-        Assert.IsTrue(set.IsExcluded(T(Unit, "A.C", "One")));
-        Assert.IsTrue(set.IsExcluded(new TestId(Unit, "A.C", "One", "u9", Variant: "One (1,2)")));
-        Assert.IsFalse(set.IsExcluded(T(Unit, "A.C", "Two")));
-    }
-
-    [TestMethod]
-    public void Uid_fallback_matches_when_location_missing()
-    {
-        var set = new ExclusionSet([new ExclusionRule(Unit, null, null, "uid-42")]);
-        Assert.IsTrue(set.IsExcluded(new TestId(Unit, null, null, "uid-42")));
-        Assert.IsFalse(set.IsExcluded(new TestId(Unit, null, null, "uid-43")));
-        Assert.IsFalse(set.IsExcluded(new TestId(E2E, null, null, "uid-42")));
-    }
-
-    [TestMethod]
-    public void Rule_survives_new_uid_when_location_present()
-    {
-        var set = new ExclusionSet([new ExclusionRule(Unit, "A.C", "One", null)]);
-        Assert.IsTrue(set.IsExcluded(T(Unit, "A.C", "One", uid: "after-rebuild")));
-    }
-
-    [TestMethod]
-    public void Empty_excludes_nothing() => Assert.IsFalse(ExclusionSet.Empty.IsExcluded(T(Unit, "A", "B")));
 }

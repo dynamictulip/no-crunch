@@ -1,0 +1,245 @@
+{
+  "about": "Shared exclusion-rule cases. Both the engine (ExclusionSet.IsExcluded, ExclusionSetTests.cs) and the plugin (ExclusionRules.isExcluded, ExclusionRulesTest.kt) run every case, so the two implementations can't drift apart. Each case gives rules (project, optional type / method / uid, optional include) and tests (project, type, method, uid, optional variant) with whether each is excluded. A null or missing type/method/uid on a rule means 'any'. The plugin's target has no variant; it's ignored there.",
+  "cases": [
+    {
+      "name": "no rules exclude nothing",
+      "rules": [],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": null, "uid": "u2", "excluded": false }
+      ]
+    },
+    {
+      "name": "project rule excludes every test in that project only",
+      "rules": [
+        { "project": "tests/E2E/E2E.csproj" }
+      ],
+      "tests": [
+        { "project": "tests/E2E/E2E.csproj", "type": "A.Flow", "method": "Checkout", "uid": "u1", "excluded": true },
+        { "project": "tests/E2E/E2E.csproj", "type": "B.Other", "method": "Login", "uid": "u2", "excluded": true },
+        { "project": "tests/E2E/E2E.csproj", "type": null, "method": null, "uid": "x", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Flow", "method": "Checkout", "uid": "u1", "excluded": false }
+      ]
+    },
+    {
+      "name": "class rule excludes that class only",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Slow" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Slow", "method": "One", "uid": "u1", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Slow", "method": "Two", "uid": "u2", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Fast", "method": "One", "uid": "u3", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.SlowTests", "method": "One", "uid": "u4", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A", "method": "Slow", "uid": "u5", "excluded": false },
+        { "project": "tests/Other/Other.csproj", "type": "A.Slow", "method": "One", "uid": "u1", "excluded": false }
+      ]
+    },
+    {
+      "name": "class rule does not touch tests with no type",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": null, "uid": "A.C", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": "One", "uid": "u1", "excluded": false }
+      ]
+    },
+    {
+      "name": "method rule excludes one test",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Two", "uid": "u2", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.D", "method": "One", "uid": "u3", "excluded": false },
+        { "project": "tests/Other/Other.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": false }
+      ]
+    },
+    {
+      "name": "method rule covers every theory row of that method",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Adds" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Adds", "uid": "u9", "variant": "Adds (1,2)", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Adds", "uid": "u10", "variant": "Adds (3,4)", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "AddsMore", "uid": "u11", "variant": "AddsMore (1)", "excluded": false }
+      ]
+    },
+    {
+      "name": "method rule survives a new uid after a rebuild",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": null }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "after-rebuild", "excluded": true }
+      ]
+    },
+    {
+      "name": "uid rule matches a test that has no location",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "uid": "uid-42" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": null, "uid": "uid-42", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": null, "uid": "uid-43", "excluded": false },
+        { "project": "tests/E2E/E2E.csproj", "type": null, "method": null, "uid": "uid-42", "excluded": false }
+      ]
+    },
+    {
+      "name": "uid rule matches by uid alone even when the test has a location",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "uid-42" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Elsewhere", "method": "Other", "uid": "uid-42", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "uid-43", "excluded": false }
+      ]
+    },
+    {
+      "name": "include rule alone excludes nothing",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "include": true }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Two", "uid": "u2", "excluded": false }
+      ]
+    },
+    {
+      "name": "test included again inside an excluded class",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Calc" },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Calc", "method": "Adds", "include": true }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Calc", "method": "Adds", "uid": "u1", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Calc", "method": "Adds", "uid": "u2", "variant": "Adds (1,2)", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Calc", "method": "Subtracts", "uid": "u3", "excluded": true }
+      ]
+    },
+    {
+      "name": "class included inside an excluded project, with one test excluded again",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj" },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "include": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Slow" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Other", "method": "One", "uid": "u1", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u2", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Slow", "uid": "u3", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": null, "uid": "u4", "excluded": true }
+      ]
+    },
+    {
+      "name": "rule order does not matter for nested rules",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Slow" },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "include": true },
+        { "project": "tests/Unit/Unit.csproj" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.Other", "method": "One", "uid": "u1", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u2", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Slow", "uid": "u3", "excluded": true }
+      ]
+    },
+    {
+      "name": "uid include brings a location-less test back inside an excluded project",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj" },
+        { "project": "tests/Unit/Unit.csproj", "uid": "uid-42", "include": true }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": null, "uid": "uid-42", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": null, "method": null, "uid": "uid-43", "excluded": true }
+      ]
+    },
+    {
+      "name": "project include rule does not override a class exclusion",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "include": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.D", "method": "One", "uid": "u2", "excluded": false }
+      ]
+    },
+    {
+      "name": "equally specific exclude and include on a test: exclusion wins, include first",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "include": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": true }
+      ]
+    },
+    {
+      "name": "equally specific exclude and include on a test: exclusion wins, exclude first",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One" },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "include": true }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": true }
+      ]
+    },
+    {
+      "name": "equally specific exclude and include on a class: exclusion wins",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj" },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "include": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": true }
+      ]
+    },
+    {
+      "name": "uid rule and method rule are equally specific: exclusion wins",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "include": true },
+        { "project": "tests/Unit/Unit.csproj", "uid": "u1" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": true },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u2", "excluded": false }
+      ]
+    },
+    {
+      "name": "matching is case-sensitive",
+      "rules": [
+        { "project": "tests/Unit/Unit.csproj" },
+        { "project": "tests/Other/Other.csproj", "type": "A.Calc" },
+        { "project": "tests/Other/Other.csproj", "type": "A.Misc", "method": "Adds" },
+        { "project": "tests/Other/Other.csproj", "uid": "uid-abc" }
+      ],
+      "tests": [
+        { "project": "tests/unit/unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": false },
+        { "project": "tests/Other/Other.csproj", "type": "a.calc", "method": "One", "uid": "u2", "excluded": false },
+        { "project": "tests/Other/Other.csproj", "type": "A.Misc", "method": "adds", "uid": "u3", "excluded": false },
+        { "project": "tests/Other/Other.csproj", "type": null, "method": null, "uid": "UID-ABC", "excluded": false },
+        { "project": "tests/Other/Other.csproj", "type": "A.Calc", "method": "One", "uid": "u4", "excluded": true }
+      ]
+    },
+    {
+      "name": "rules for another project never apply",
+      "rules": [
+        { "project": "tests/E2E/E2E.csproj" },
+        { "project": "tests/E2E/E2E.csproj", "type": "A.C" },
+        { "project": "tests/E2E/E2E.csproj", "type": "A.C", "method": "One" },
+        { "project": "tests/E2E/E2E.csproj", "uid": "u1" },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Two" }
+      ],
+      "tests": [
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "One", "uid": "u1", "excluded": false },
+        { "project": "tests/Unit/Unit.csproj", "type": "A.C", "method": "Two", "uid": "u2", "excluded": true }
+      ]
+    }
+  ]
+}
