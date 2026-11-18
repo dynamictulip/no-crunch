@@ -104,6 +104,8 @@ public class EngineCoreTests
         /// the run reports one result per row with the method's UID and the row as the variant.
         /// </summary>
         public Dictionary<string, (string variant, TestState state)[]> Rows { get; } = new();
+        /// <summary>Runs after discovery, before the tests execute; cancelling it cancels the run, like the real runner.</summary>
+        public Func<string, CancellationToken, Task> RunGate { get; set; } = (_, _) => Task.CompletedTask;
 
         public async Task<ProjectRunOutcome> RunAsync(ProjectInfo project, Func<TestId, bool> shouldRun,
             Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct)
@@ -111,6 +113,8 @@ public class EngineCoreTests
             Runs.Enqueue(project.RepoRelativePath);
             var ids = Tests[project.RepoRelativePath].Select(t => (id: new TestId(project.RepoRelativePath, "T", t.method, t.method), t.state)).ToList();
             await onUpdates(ids.Select(t => U(t.id, shouldRun(t.id) ? TestState.Queued : TestState.Excluded)).ToList());
+            try { await RunGate(project.RepoRelativePath, ct); }
+            catch (OperationCanceledException) { return new ProjectRunOutcome(project.RepoRelativePath, ProjectRunStatus.Cancelled, null); }
             var ran = ids.Where(t => shouldRun(t.id)).ToList();
             foreach (var t in ran) Executed.Add(t.id.Key);
             if (ran.Count > 0)
@@ -262,7 +266,7 @@ public class EngineCoreTests
     }
 
     [TestMethod]
-    public async Task Change_during_cycle_cancels_and_unions()
+    public async Task Change_to_a_project_in_the_running_cycle_cancels_and_unions()
     {
         var h = await CreateAsync();
         Drain(h);
@@ -277,7 +281,7 @@ public class EngineCoreTests
             catch (OperationCanceledException) { cancelledFirst.SetResult(); throw; }
         };
 
-        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        h.Core.FilesChanged([Abs(h, "tests/Core.Tests/CalcTests.cs"), Abs(h, "tests/Other.Tests/OtherTests.cs")]);
         await firstBuildStarted.Task.WaitAsync(Wait);
         h.Core.FilesChanged([Abs(h, "src/Core/Calc.cs")]);
         await cancelledFirst.Task.WaitAsync(Wait);
@@ -287,6 +291,99 @@ public class EngineCoreTests
         Assert.AreEqual(2, builds.Length);
         CollectionAssert.AreEquivalent(new[] { Core, CoreTests, Other }, builds[1]);
         Assert.AreEqual(1, h.Tests.Runs.Count(r => r == Other), "Other runs once, in the second cycle");
+    }
+
+    /// <summary>Holds the first build open until released; reports whether the engine cancelled it.</summary>
+    private sealed class HeldBuild
+    {
+        public TaskCompletionSource Started { get; } = new();
+        public TaskCompletionSource Release { get; } = new();
+        public bool Interrupted { get; private set; }
+        private int _calls;
+
+        public HeldBuild(FakeBuild build) => build.Gate = async ct =>
+        {
+            if (Interlocked.Increment(ref _calls) != 1) return;
+            Started.SetResult();
+            try { await Release.Task.WaitAsync(ct); }
+            catch (OperationCanceledException) { Interrupted = true; throw; }
+        };
+    }
+
+    [TestMethod]
+    public async Task Change_to_a_project_outside_the_running_cycle_waits_for_it_to_finish()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        var held = new HeldBuild(h.Build);
+
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await held.Started.Task.WaitAsync(Wait);
+        h.Core.FilesChanged([Abs(h, "src/Core/Calc.cs")]);
+        await Task.Delay(300); // well past the 80 ms debounce: an interrupt would have happened by now
+        held.Release.SetResult();
+        await h.Events.WaitIdleAsync();
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsFalse(held.Interrupted, "Core and Core.Tests aren't part of the running cycle");
+        var builds = h.Build.Builds.ToArray();
+        Assert.AreEqual(2, builds.Length, "the change is picked up by the next cycle");
+        CollectionAssert.AreEqual(new[] { Other }, builds[0]);
+        CollectionAssert.AreEqual(new[] { Core, CoreTests }, builds[1]);
+    }
+
+    [TestMethod]
+    public async Task Change_to_a_file_in_no_project_does_not_interrupt()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        var held = new HeldBuild(h.Build);
+
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await held.Started.Task.WaitAsync(Wait);
+        h.Core.FilesChanged([Abs(h, "build.log")]);
+        await Task.Delay(300);
+        held.Release.SetResult();
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsFalse(held.Interrupted);
+    }
+
+    [TestMethod]
+    public async Task Project_file_change_interrupts_even_outside_the_running_cycle()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        var held = new HeldBuild(h.Build);
+
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await held.Started.Task.WaitAsync(Wait);
+        // A project file can change references, so which projects the running cycle needs is no longer known.
+        h.Core.FilesChanged([Abs(h, "src/Core/Core.csproj")]);
+        await Task.Delay(300);
+        held.Release.TrySetResult();
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsTrue(held.Interrupted);
+    }
+
+    [TestMethod]
+    public async Task Running_a_test_outside_the_running_cycle_waits_for_it_to_finish()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        var held = new HeldBuild(h.Build);
+
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await held.Started.Task.WaitAsync(Wait);
+        h.Core.RunTests([$"{CoreTests}|T|A"]);
+        await Task.Delay(300);
+        held.Release.SetResult();
+        await h.Events.WaitIdleAsync();
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsFalse(held.Interrupted);
+        Assert.AreEqual(1, h.Tests.Runs.Count(r => r == CoreTests), "the requested test runs in the next cycle");
     }
 
     [TestMethod]
@@ -672,6 +769,102 @@ public class EngineCoreTests
         var h = await CreateAsync();
         await h.Core.DisposeAsync();
         await h.Core.DisposeAsync();
+    }
+
+    [TestMethod]
+    public async Task A_steady_stream_of_changes_cannot_hold_off_a_cycle_forever()
+    {
+        var h = await CreateAsync();
+        h.Core.MaxDebounce = TimeSpan.FromMilliseconds(300);
+        Drain(h);
+
+        // A change every 30 ms never leaves the 80 ms quiet period the debounce waits for.
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(1.5);
+        while (DateTime.UtcNow < until && h.Build.Builds.IsEmpty)
+        {
+            h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+            await Task.Delay(30);
+        }
+
+        Assert.IsFalse(h.Build.Builds.IsEmpty, "a cycle starts once the longest debounce wait has passed");
+    }
+
+    [TestMethod]
+    public async Task An_interrupted_cycle_does_not_rerun_test_projects_that_had_finished()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        var coreTestsStarted = new TaskCompletionSource();
+        var otherFinished = new TaskCompletionSource();
+        var calls = 0;
+        h.Tests.RunGate = async (project, ct) =>
+        {
+            if (project == Other) { otherFinished.TrySetResult(); return; }
+            if (Interlocked.Increment(ref calls) != 1) return;
+            coreTestsStarted.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        };
+
+        h.Core.RunAll();
+        await Task.WhenAll(coreTestsStarted.Task, otherFinished.Task).WaitAsync(Wait);
+        await Task.Delay(50); // let Other's run report back
+        h.Core.FilesChanged([Abs(h, "tests/Core.Tests/CalcTests.cs")]); // a change to Core.Tests interrupts the cycle
+        await h.Events.WaitIdleAsync();
+
+        Assert.AreEqual(1, h.Tests.Runs.Count(r => r == Other), "Other finished before the interruption, so it is not run again");
+        Assert.AreEqual(2, h.Tests.Runs.Count(r => r == CoreTests), "Core.Tests was interrupted, so it runs again");
+        CollectionAssert.DoesNotContain(h.Build.Builds.Last(), Other, "Other is not rebuilt either");
+    }
+
+    [TestMethod]
+    public async Task A_retry_after_a_failed_cycle_does_not_interrupt_a_later_cycle()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        h.Build.RestoreFailuresRemaining = 1;
+        var interrupted = false;
+        var calls = 0;
+        h.Build.Gate = async ct =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return;
+            try { await Task.Delay(500, ct); } // outlasts the 200 ms retry the failed cycle arms
+            catch (OperationCanceledException) { interrupted = true; throw; }
+        };
+
+        h.Core.FilesChanged([Abs(h, "src/Core/Core.csproj")]);
+        await h.Events.WaitIdleAsync(); // the failed cycle
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsFalse(interrupted, "the retry timer found no new work, so the running cycle carried on");
+        Assert.AreEqual(1, h.Build.Builds.Count);
+    }
+
+    [TestMethod]
+    public async Task A_malformed_test_key_does_not_break_later_cycles()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+
+        h.Core.RunTests(["not-a-test-key"]);
+        h.Core.FilesChanged([Abs(h, "tests/Other.Tests/OtherTests.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsFalse(h.Events.Log.Any(l => l.StartsWith("error:")), string.Join(" | ", h.Events.Log));
+        CollectionAssert.Contains(h.Tests.Runs.ToArray(), Other);
+    }
+
+    [TestMethod]
+    public async Task Failing_to_save_results_is_reported_but_not_retried()
+    {
+        var root = TempDir.Create();
+        File.WriteAllText(Path.Combine(root, "blocker"), ""); // a file where the results folder should be
+        var h = await CreateAsync(store: new ResultStore(Path.Combine(root, "blocker", "results.json")));
+        await Task.Delay(500); // a failed cycle would retry after 200 ms
+
+        Assert.AreEqual(1, h.Build.Builds.Count, "the cycle is not rebuilt and rerun because saving failed");
+        Assert.IsTrue(h.Events.Log.Any(l => l.StartsWith("warning:") && l.Contains("save")), string.Join(" | ", h.Events.Log));
+        Assert.IsFalse(h.Events.Log.Any(l => l.StartsWith("error:")), string.Join(" | ", h.Events.Log));
     }
 
     [TestMethod]

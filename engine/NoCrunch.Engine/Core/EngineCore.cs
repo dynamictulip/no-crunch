@@ -31,11 +31,15 @@ public sealed class EngineCore(
     private TaskCompletionSource _wake = NewSignal();
     private ExclusionSet _exclusions = ExclusionSet.Empty;
     private ProjectGraph? _graph;
+    /// <summary>Projects the running cycle builds, tests or builds against; null until it has worked them out.</summary>
+    private HashSet<string>? _cycleProjects;
     private bool _paused;
     private Task? _loop;
     private TimeSpan? _nextRetry;
 
     public TimeSpan Debounce { get; set; } = TimeSpan.FromMilliseconds(300);
+    /// <summary>Longest a cycle waits for changes to go quiet, so a file that never stops changing can't hold off testing.</summary>
+    public TimeSpan MaxDebounce { get; set; } = TimeSpan.FromSeconds(2);
     public int MaxParallelTestProjects { get; set; } = Math.Max(1, Environment.ProcessorCount / 2);
     /// <summary>First delay before retrying a cycle that failed (e.g. restore could not reach a feed); doubles up to 5 minutes.</summary>
     public TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(15);
@@ -69,10 +73,12 @@ public sealed class EngineCore(
         // Ignore changes that can't affect builds or tests (.git, bin/obj, git-ignored folders, our own files).
         var tracked = repoPaths.Where(workspace.Tracks).ToList();
         if (tracked.Count == 0) return;
+        var relative = tracked.Select(RepoRelative).ToList();
         lock (_lock)
         {
             _pending.Files.UnionWith(tracked);
-            if (_pending.Files.Count > ReconcileThreshold) { _pending.Reconcile = true; _pending.Files.Clear(); }
+            _pending.FilesRel.UnionWith(relative);
+            if (_pending.Files.Count > ReconcileThreshold) { _pending.Reconcile = true; _pending.Files.Clear(); _pending.FilesRel.Clear(); }
         }
         Signal();
     }
@@ -160,10 +166,14 @@ public sealed class EngineCore(
         {
             await CurrentSignal().WaitAsync(stop);
             ResetSignal();
-            while (true) // debounce: wait for a quiet period
+            // Debounce: wait for a quiet period, but never longer than MaxDebounce in all.
+            var debounceUntil = DateTime.UtcNow + MaxDebounce;
+            while (true)
             {
+                var left = debounceUntil - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero) break;
                 var next = CurrentSignal();
-                if (await Task.WhenAny(next, Task.Delay(Debounce, stop)) != next) break;
+                if (await Task.WhenAny(next, Task.Delay(Debounce < left ? Debounce : left, stop)) != next) break;
                 ResetSignal();
             }
 
@@ -186,11 +196,57 @@ public sealed class EngineCore(
 
             using var cycleCts = CancellationTokenSource.CreateLinkedTokenSource(stop);
             var cycle = RunCycleAsync(snapshot, cycleCts.Token);
-            var interrupt = CurrentSignal();
-            if (await Task.WhenAny(cycle, interrupt) == interrupt && !cycle.IsCompleted)
+            while (await Task.WhenAny(cycle, CurrentSignal()) != cycle)
+            {
+                if (!ShouldInterrupt()) continue;
                 await cycleCts.CancelAsync();
+                break;
+            }
             await cycle; // never throws; requeues its work if cancelled
+            // Work that arrived during the cycle without interrupting it is waiting: start on it.
+            lock (_lock)
+            {
+                _cycleProjects = null;
+                if (!_pending.IsEmpty) _wake.TrySetResult();
+            }
         }
+    }
+
+    /// <summary>
+    /// A signal interrupts the running cycle only for a pause, or for new work that touches the projects the cycle is
+    /// building or testing. Anything else (a retry timer, a resume, a change to another project or to a file in no
+    /// project) waits for the next cycle. Checked and reset under one lock, so work that arrives in between always
+    /// leaves the signal set.
+    /// </summary>
+    private bool ShouldInterrupt()
+    {
+        lock (_lock)
+        {
+            if (_paused || (!_pending.IsEmpty && PendingTouchesCycle())) return true;
+            if (_wake.Task.IsCompleted) _wake = NewSignal();
+            return false;
+        }
+    }
+
+    /// <summary>Call under <see cref="_lock"/>.</summary>
+    private bool PendingTouchesCycle()
+    {
+        // Until the cycle has worked out its projects (or with no graph to map files), any new work interrupts it.
+        if (_cycleProjects is not { } running || _graph is not { } graph) return true;
+        var p = _pending;
+        if (p.Reconcile || p.Initialize || p.NeedGraph || p.Restore || p.All || p.UnknownTestProjects) return true;
+        // Project files can change references, and .gitignore which files are in the mirror: neither maps to a fixed set.
+        if (p.FilesRel.Any(f => ProjectGraph.IsGraphFile(f) || Path.GetFileName(f) == ".gitignore")) return true;
+        var touched = graph.DirtyProjects(p.FilesRel).ToHashSet(StringComparer.Ordinal);
+        touched.UnionWith(p.Projects);
+        touched.UnionWith(p.ManualKeys.Concat(p.RerunKeys).Select(ProjectOfKey).OfType<string>());
+        return touched.Overlaps(running);
+    }
+
+    private string RepoRelative(string repoPath)
+    {
+        try { return map.RepoRelative(RealPath.Of(repoPath)); }
+        catch (Exception e) when (e is ArgumentException or IOException) { return map.RepoRelative(repoPath); }
     }
 
     private async Task RunCycleAsync(Pending snap, CancellationToken ct)
@@ -201,12 +257,15 @@ public sealed class EngineCore(
         // Every change copied into the mirror is recorded here as it happens. If this cycle is cancelled or fails,
         // these are handed to the next cycle: the mirror already has them, so a re-sync would not report them again.
         var synced = new HashSet<string>(snap.SyncedRel, StringComparer.Ordinal);
+        // How far the cycle got, so an interrupted or failed cycle hands on only what it hadn't finished.
+        var progress = new CycleProgress();
         try
         {
             await events.StateChanged(EngineState.Syncing, 0);
             if (snap.Reconcile) synced.UnionWith(await workspace.ReconcileAsync(ct, synced));
             else if (snap.Files.Count > 0) synced.UnionWith(await workspace.SyncAsync(snap.Files.ToList(), ct, synced));
             if (snap.Initialize) await workspace.InitializeAsync(ct);
+            progress.Synced = true;
 
             if (_graph is null || synced.Any(ProjectGraph.IsGraphFile)) needGraph = true;
             // Restore before reading the graph: test settings that come from NuGet packages (e.g. xUnit v3 marking a
@@ -227,7 +286,7 @@ public sealed class EngineCore(
             dirty.UnionWith(graph.DirtyProjects(synced));
             if (snap.All) dirty.UnionWith(graph.Projects.Select(p => p.RepoRelativePath));
             var runKeys = snap.ManualKeys.Concat(snap.RerunKeys).ToHashSet(StringComparer.Ordinal);
-            var manualProjects = runKeys.Select(ProjectOfKey).Where(p => graph.Find(p) is not null).ToHashSet(StringComparer.Ordinal);
+            var manualProjects = runKeys.Select(ProjectOfKey).OfType<string>().Where(p => graph.Find(p) is not null).ToHashSet(StringComparer.Ordinal);
             var manualOnly = manualProjects.Where(p => !dirty.Contains(p)).ToHashSet(StringComparer.Ordinal);
             dirty.UnionWith(manualProjects);
             if (snap.UnknownTestProjects)
@@ -244,6 +303,8 @@ public sealed class EngineCore(
                     .Where(p => p.IsTestProject && _exclusions.ExcludesWholeProject(p.RepoRelativePath) && !manualProjects.Contains(p.RepoRelativePath))
                     .Select(p => p.RepoRelativePath).ToHashSet(StringComparer.Ordinal);
             dirty.ExceptWith(skipped);
+            // From here the changed files, "run all" and the requested tests are all accounted for in dirty.
+            progress.Planned = true;
 
             if (dirty.Count == 0)
             {
@@ -257,6 +318,8 @@ public sealed class EngineCore(
             dirty.ExceptWith(skipped);
             var closure = graph.WithReferences(dirty);
             dirty.UnionWith(closure.Where(p => _unhealthy.Contains(p) || !_builtThisSession.Contains(p)));
+            // What this cycle builds and tests, and what it builds against: new work touching these interrupts it.
+            lock (_lock) _cycleProjects = closure.Concat(dirty).ToHashSet(StringComparer.Ordinal);
 
             HashSet<string> previouslyFailing;
             lock (_lock)
@@ -265,18 +328,31 @@ public sealed class EngineCore(
             await events.StateChanged(EngineState.Building, dirty.Count);
             var outcomes = await build.BuildAsync(graph.InBuildOrder(dirty),
                 p => events.ProjectBuildStarted(p.RepoRelativePath),
-                events.ProjectBuildFinished, ct);
+                async outcome =>
+                {
+                    // Recorded as each build finishes, so a cancelled cycle still gets credit for what it built.
+                    if (outcome.Status == BuildStatus.Succeeded)
+                    {
+                        lock (_lock)
+                        {
+                            _unhealthy.Remove(outcome.Project);
+                            _builtThisSession.Add(outcome.Project);
+                            if (graph.Find(outcome.Project) is { IsTestProject: false }) progress.Done.Add(outcome.Project);
+                        }
+                    }
+                    await events.ProjectBuildFinished(outcome);
+                }, ct);
             ct.ThrowIfCancellationRequested();
             foreach (var (project, outcome) in outcomes)
-            {
-                if (outcome.Status == BuildStatus.Succeeded) { _unhealthy.Remove(project); _builtThisSession.Add(project); }
-                else if (outcome.Status != BuildStatus.Cancelled) _unhealthy.Add(project);
-            }
+                if (outcome.Status is not (BuildStatus.Succeeded or BuildStatus.Cancelled)) _unhealthy.Add(project);
 
             var testProjects = graph.InBuildOrder(dirty).Where(p => p.IsTestProject).ToList();
             foreach (var p in testProjects.Where(p => !p.IsMtp))
+            {
                 await events.ProjectRunFinished(new ProjectRunOutcome(p.RepoRelativePath, ProjectRunStatus.UnsupportedNotMtp,
                     "Not a Microsoft.Testing.Platform test project (VSTest is not supported yet)."));
+                lock (_lock) progress.Done.Add(p.RepoRelativePath);
+            }
 
             var runnable = testProjects
                 .Where(p => p.IsMtp && outcomes.GetValueOrDefault(p.RepoRelativePath)?.Status == BuildStatus.Succeeded)
@@ -288,28 +364,33 @@ public sealed class EngineCore(
             await events.StateChanged(EngineState.Testing, runnable.Count);
             if (MaxParallelTestProjects <= 1)
             {
-                foreach (var p in runnable) await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), ct);
+                foreach (var p in runnable) await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), progress, ct);
             }
             else
             {
                 await Parallel.ForEachAsync(runnable, new ParallelOptions { MaxDegreeOfParallelism = MaxParallelTestProjects, CancellationToken = ct },
-                    async (p, token) => await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), token));
+                    async (p, token) => await RunProjectAsync(p, runKeys, snap.ManualKeys, manualOnly.Contains(p.RepoRelativePath), progress, token));
             }
             ct.ThrowIfCancellationRequested();
 
             List<TestResultUpdate> toSave;
             lock (_lock) toSave = _results.Values.ToList();
-            store.Save(toSave);
+            try { store.Save(toSave); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The results already reached the client; rerunning the cycle would not make the disk writable.
+                await events.Log("warning", "Could not save results; they will not survive a restart: " + ex.Message);
+            }
             _nextRetry = null;
             await events.StateChanged(EngineState.Idle, 0);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            Requeue(snap, dirty, synced, needGraph, restore);
+            Requeue(snap, dirty, synced, needGraph, restore, progress);
         }
         catch (Exception ex)
         {
-            Requeue(snap, dirty, synced, needGraph, restore);
+            Requeue(snap, dirty, synced, needGraph, restore, progress);
             var delay = _nextRetry ?? RetryDelay;
             _nextRetry = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, TimeSpan.FromMinutes(5).Ticks));
             await events.Log("error", $"Cycle failed; retrying in {delay.TotalSeconds:0.#}s: " + map.RewriteText(ex.ToString()));
@@ -318,30 +399,51 @@ public sealed class EngineCore(
         }
     }
 
+    /// <summary>How far a cycle got. <see cref="Done"/> is guarded by <see cref="_lock"/>.</summary>
+    private sealed class CycleProgress
+    {
+        /// <summary>The changed files are in the mirror and the workspace is initialised.</summary>
+        public bool Synced;
+        /// <summary>Everything asked for has been turned into the cycle's set of dirty projects.</summary>
+        public bool Planned;
+        /// <summary>Projects with nothing left to do: built (non-test projects) or with their tests run.</summary>
+        public HashSet<string> Done { get; } = new(StringComparer.Ordinal);
+    }
+
     /// <summary>Hands everything an interrupted or failed cycle had not finished to the next cycle.</summary>
-    private void Requeue(Pending snap, IEnumerable<string> dirty, IEnumerable<string> synced, bool needGraph, bool restore)
+    private void Requeue(Pending snap, IEnumerable<string> dirty, IEnumerable<string> synced, bool needGraph, bool restore,
+        CycleProgress progress)
     {
         lock (_lock)
         {
-            _pending.Projects.UnionWith(dirty);
-            _pending.SyncedRel.UnionWith(synced);
-            _pending.ManualKeys.UnionWith(snap.ManualKeys);
-            _pending.RerunKeys.UnionWith(snap.RerunKeys);
+            var done = progress.Done;
+            _pending.Projects.UnionWith(dirty.Where(p => !done.Contains(p)));
+            // Once planned, the changed files, "run all" and the requested tests are already reflected in dirty.
+            bool StillWanted(string key) => !progress.Planned || (ProjectOfKey(key) is { } p && !done.Contains(p));
+            _pending.ManualKeys.UnionWith(snap.ManualKeys.Where(StillWanted));
+            _pending.RerunKeys.UnionWith(snap.RerunKeys.Where(StillWanted));
+            if (!progress.Planned)
+            {
+                _pending.SyncedRel.UnionWith(synced);
+                _pending.All |= snap.All;
+                _pending.UnknownTestProjects |= snap.UnknownTestProjects;
+            }
             _pending.NeedGraph |= needGraph;
             _pending.Restore |= restore;
-            _pending.All |= snap.All;
-            _pending.UnknownTestProjects |= snap.UnknownTestProjects;
-            _pending.Initialize |= snap.Initialize;
-            // Re-syncing is safe: files already copied report no change, and are carried in SyncedRel instead.
-            if (snap.Reconcile) _pending.Reconcile = true;
-            else _pending.Files.UnionWith(snap.Files);
+            if (!progress.Synced)
+            {
+                _pending.Initialize |= snap.Initialize;
+                // Re-syncing is safe: files already copied report no change, and are carried in SyncedRel instead.
+                if (snap.Reconcile) _pending.Reconcile = true;
+                else { _pending.Files.UnionWith(snap.Files); _pending.FilesRel.UnionWith(snap.FilesRel); }
+            }
         }
     }
 
     /// <param name="runKeys">Tests to run even if excluded: manual runs plus re-included tests.</param>
     /// <param name="manualKeys">The subset the user asked to run; their results are tagged <see cref="RunKind.Manual"/>.</param>
     private async Task RunProjectAsync(ProjectInfo project, IReadOnlySet<string> runKeys, IReadOnlySet<string> manualKeys,
-        bool manualOnly, CancellationToken ct)
+        bool manualOnly, CycleProgress progress, CancellationToken ct)
     {
         var first = true;
         // Asking for one theory row runs the whole theory: rows share the theory's UID, and only the UID can be run.
@@ -437,6 +539,8 @@ public sealed class EngineCore(
         if (!ct.IsCancellationRequested && outcome.Status == ProjectRunStatus.Completed && rowsSeen.Count > 0)
             await events.TestsDiscovered(project.RepoRelativePath, SettleTheories(project.RepoRelativePath, rowsSeen, Tag));
         if (!ct.IsCancellationRequested) await events.ProjectRunFinished(outcome);
+        if (!ct.IsCancellationRequested && outcome.Status != ProjectRunStatus.Cancelled)
+            lock (_lock) progress.Done.Add(project.RepoRelativePath);
     }
 
     /// <summary>
@@ -514,11 +618,14 @@ public sealed class EngineCore(
     /// <summary>Stored results that belong to excluded tests: manual runs, or tests last seen as excluded.</summary>
     private static bool IsExcludedResult(TestResultUpdate r) => r.RunKind == RunKind.Manual || r.State == TestState.Excluded;
 
-    private static string ProjectOfKey(string key) => key[..key.IndexOf('|')];
+    /// <summary>The project part of a <see cref="TestId.Key"/>, or null if the key is malformed (it then matches no test).</summary>
+    private static string? ProjectOfKey(string key) => key.IndexOf('|') is var i and >= 0 ? key[..i] : null;
 
     private sealed class Pending
     {
         public HashSet<string> Files { get; } = new(StringComparer.Ordinal);
+        /// <summary><see cref="Files"/> as repo-relative paths, to match them against the project graph.</summary>
+        public HashSet<string> FilesRel { get; } = new(StringComparer.Ordinal);
         /// <summary>Repo-relative paths already copied into the mirror whose projects still need building.</summary>
         public HashSet<string> SyncedRel { get; } = new(StringComparer.Ordinal);
         public HashSet<string> Projects { get; } = new(StringComparer.Ordinal);
