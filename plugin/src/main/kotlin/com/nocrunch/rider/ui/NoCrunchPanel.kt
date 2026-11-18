@@ -27,6 +27,10 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.tree.TreeUtil
 import com.nocrunch.rider.NoCrunchService
+import com.nocrunch.rider.engine.BuildStatus
+import com.nocrunch.rider.engine.EngineState
+import com.nocrunch.rider.engine.RunStatus
+import com.nocrunch.rider.engine.TestState
 import com.nocrunch.rider.settings.NoCrunchConfigurable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -102,7 +106,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         for (path in selected) {
             val found = TreeUtil.treeNodeTraverser(path.lastPathComponent as CheckedTreeNode).preOrderDfsTraversal()
                 .mapNotNull { (it as? CheckedTreeNode)?.userObject as? TestNode }
-                .firstOrNull { it.shownOutcome == "failed" && it.canDebug }
+                .firstOrNull { it.shownOutcome == TestState.FAILED && it.canDebug }
             if (found != null) return found
         }
         return null
@@ -266,7 +270,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         val model = TestTreeModel.filter(s.projects, failuresOnly, settings.state.hideExcluded)
         bar.update(s.bar)
         // While paused, results can't be trusted, so hide them behind a big Resume button.
-        val paused = s.state.state == "paused"
+        val paused = s.state.state == EngineState.PAUSED
         if (paused) waitingLabel.text = StatusText.waiting(s.state.queued)
         (cards.layout as java.awt.CardLayout).show(cards, if (paused) PAUSED_CARD else RESULTS_CARD)
         val hiddenBy = HiddenBy.of(hasTests = s.projects.any { it.hasTests }, shownEmpty = model.isEmpty(), failuresOnly, settings.state.hideExcluded)
@@ -344,10 +348,10 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 details.show {
                     normal(d.displayName).normal(" — ")
                     when {
-                        o.freshness == null -> status(d.state, d.state == "failed")
-                        o.shownOutcome != null -> normal("last result: ").status(o.shownOutcome!!, o.shownOutcome == "failed")
-                            .normal(" (").normal(o.freshness!!).normal(if (o.freshness == "stale") " — the code changed since this ran" else "").normal(")")
-                        else -> normal(d.state)
+                        o.freshness == null -> status(d.state.wire, d.state == TestState.FAILED)
+                        o.shownOutcome != null -> normal("last result: ").status(o.shownOutcome!!.wire, o.shownOutcome == TestState.FAILED)
+                            .normal(" (").normal(o.freshness!!.wire).normal(if (o.freshness == TestState.STALE) " — the code changed since this ran" else "").normal(")")
+                        else -> normal(d.state.wire)
                     }
                     d.durationMs?.let { normal(" (${"%.0f".format(it)} ms)") }
                     normal("\n")
@@ -363,19 +367,19 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 details.show {
                     normal(o.path).normal("\n")
                     if (b != null) {
-                        normal("Build: ").status(b.status, b.status == "failed")
+                        normal("Build: ").status(b.status.wire, b.status == BuildStatus.FAILED)
                         b.blockedBy?.let { normal(" (blocked by $it)") }
                         normal("\n")
                         if (b.output.isNotBlank()) normal("\n").normal(b.output).normal("\n")
                     }
-                    o.run?.error?.let { normal("\nRun: ").red(o.run.status).normal(" — ").normal(it).normal("\n") }
+                    o.run?.error?.let { normal("\nRun: ").red(o.run.status.wire).normal(" — ").normal(it).normal("\n") }
                 }
             }
             is ViewNode -> details.show {
                 normal(o.label).normal("\n")
                 normal("✔ ${o.counts.passed}  ").status("✖ ${o.counts.failed}", o.counts.failed > 0).normal("  ○ ${o.counts.pending}")
                 o.durationMs?.let { normal("   ").normal(TestTreeModel.formatDuration(it)) }
-                o.freshness?.let { normal("   (").normal(it).normal(")") }
+                o.freshness?.let { normal("   (").normal(it.wire).normal(")") }
                 normal("\n")
             }
             else -> details.clear()
@@ -432,7 +436,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     }
 
     private fun wrapForPause(a: AnAction): AnAction {
-        val paused = { service.state.value.state == "paused" }
+        val paused = { service.state.value.state == EngineState.PAUSED }
         return if (a is com.intellij.openapi.actionSystem.ActionGroup) {
             object : com.intellij.openapi.actionSystem.ActionGroupWrapper(a) {
                 override fun update(e: AnActionEvent) { super.update(e); if (paused()) e.presentation.isEnabled = false }
@@ -448,12 +452,12 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         add(object : AnAction() {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun update(e: AnActionEvent) {
-                val paused = service.state.value.state == "paused"
+                val paused = service.state.value.state == EngineState.PAUSED
                 e.presentation.icon = if (paused) AllIcons.Actions.Resume else AllIcons.Actions.Pause
                 e.presentation.text = if (paused) "Resume No Crunch" else "Pause No Crunch"
             }
             override fun actionPerformed(e: AnActionEvent) {
-                if (service.state.value.state == "paused") service.resume() else service.pause()
+                if (service.state.value.state == EngineState.PAUSED) service.resume() else service.pause()
             }
         })
         addSeparator()
@@ -620,14 +624,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 }
                 is ProjectNode -> {
                     r.icon = withKind(when (o.buildStatus) {
-                        "failed" -> AllIcons.General.Error
-                        "blocked" -> AllIcons.General.Warning
-                        "building" -> AllIcons.Process.Step_1
+                        BuildStatus.FAILED -> AllIcons.General.Error
+                        BuildStatus.BLOCKED -> AllIcons.General.Warning
+                        BuildStatus.BUILDING -> AllIcons.Process.Step_1
                         else -> if (o.excluded) KindIcons.excluded else outcomeIcon(o.shownOutcome, o.isFresh)
                     }, KindIcons.project)
                     when {
                         o.excluded -> r.append(o.name, SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                        o.shownOutcome == "failed" -> r.append(o.name, if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD)
+                        o.shownOutcome == TestState.FAILED -> r.append(o.name, if (o.isFresh) FAILED_BOLD else STALE_FAILED_BOLD)
                         else -> appendName(o.name, bold = true, parent = true)
                     }
                     if (o.isTestProject) {
@@ -638,11 +642,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     }
                     when {
                         o.excluded -> out.append("  (excluded)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.buildStatus == "failed" -> out.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
-                        o.buildStatus == "blocked" -> out.append("  blocked by ${o.blockedByName ?: "build failure"}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.run?.status == "unsupportedNotMtp" -> out.append("  unsupported (VSTest)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.run?.status == "unsupportedMtpVersion" -> out.append("  unsupported MTP version", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
-                        o.run?.status == "crashed" -> out.append("  test host crashed", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                        o.buildStatus == BuildStatus.FAILED -> out.append("  build failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                        o.buildStatus == BuildStatus.BLOCKED -> out.append("  blocked by ${o.blockedByName ?: "build failure"}", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.run?.status == RunStatus.UNSUPPORTED_NOT_MTP -> out.append("  unsupported (VSTest)", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.run?.status == RunStatus.UNSUPPORTED_MTP_VERSION -> out.append("  unsupported MTP version", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                        o.run?.status == RunStatus.CRASHED -> out.append("  test host crashed", SimpleTextAttributes.ERROR_ATTRIBUTES)
                     }
                 }
                 is ViewNode -> {
@@ -657,7 +661,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     when {
                         // Excluded rows are grey unless they hold a current manual result.
                         o.excluded && o.leaves.none { it.manual && it.freshness == null } -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                        o.shownOutcome == "failed" -> r.append(o.label, if (o.isFresh) FAILED else STALE_FAILED)
+                        o.shownOutcome == TestState.FAILED -> r.append(o.label, if (o.isFresh) FAILED else STALE_FAILED)
                         else -> appendName(o.label, parent = true)
                     }
                     appendCounts(o.counts, o.excluded)
@@ -673,13 +677,13 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     // test shows its status once there's a result (or while running), otherwise what it is.
                     // Excluded tests always show the excluded icon; a manual run's result goes beside the run time.
                     val status = if (o.excluded) KindIcons.excluded
-                        else outcomeIcon(o.shownOutcome, o.freshness == null) ?: AllIcons.Process.Step_1.takeIf { d.state == "running" }
+                        else outcomeIcon(o.shownOutcome, o.freshness == null) ?: AllIcons.Process.Step_1.takeIf { d.state == TestState.RUNNING }
                     r.icon = if (o.rows.isNotEmpty()) withKind(status, KindIcons.testSet) else status ?: KindIcons.test
                     // Failed and excluded rows keep their red or grey; colour coding only applies to the rest.
                     when {
                         // Excluded tests are grey unless they have a current manual result; a stale one goes grey again.
                         o.excluded && !(o.manual && o.freshness == null) -> r.append(o.label, SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                        o.shownOutcome == "failed" -> r.append(o.label, if (o.freshness == null) FAILED else STALE_FAILED)
+                        o.shownOutcome == TestState.FAILED -> r.append(o.label, if (o.freshness == null) FAILED else STALE_FAILED)
                         o.isRow -> appendArgs(o.label)
                         else -> appendName(o.label)
                     }
@@ -687,8 +691,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     if (o.excluded && o.rows.isEmpty()) {
                         val fresh = o.freshness == null
                         when (o.shownOutcome) {
-                            "passed" -> out.append("   ✔", if (fresh) PASSED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                            "failed" -> out.append("   ✖", if (fresh) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                            TestState.PASSED -> out.append("   ✔", if (fresh) PASSED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                            TestState.FAILED -> out.append("   ✖", if (fresh) FAILED_BOLD else SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                            else -> {}
                         }
                     }
                     d.durationMs?.takeIf { o.shownOutcome != null }?.let { appendDuration(it) }
@@ -755,11 +760,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             if (status == null) kind else com.intellij.ui.RowIcon(status, com.intellij.util.ui.EmptyIcon.create(com.intellij.util.ui.JBUI.scale(4), 1), kind)
 
         /** Outcome icon, faded when the result is from an earlier run (stale/queued/running). */
-        private fun outcomeIcon(outcome: String?, fresh: Boolean): Icon? {
+        private fun outcomeIcon(outcome: TestState?, fresh: Boolean): Icon? {
             val icon = when (outcome) {
-                "passed" -> AllIcons.RunConfigurations.TestPassed
-                "failed" -> AllIcons.RunConfigurations.TestError
-                "skipped" -> AllIcons.RunConfigurations.TestSkipped
+                TestState.PASSED -> AllIcons.RunConfigurations.TestPassed
+                TestState.FAILED -> AllIcons.RunConfigurations.TestError
+                TestState.SKIPPED -> AllIcons.RunConfigurations.TestSkipped
                 else -> return null
             }
             return if (fresh) icon else com.intellij.openapi.util.IconLoader.getTransparentIcon(icon, 0.45f)
@@ -769,11 +774,11 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             if (ms != null) out.append("  ${TestTreeModel.formatDuration(ms)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
         }
 
-        private fun appendFreshness(freshness: String?) {
+        private fun appendFreshness(freshness: TestState?) {
             val text = when (freshness) {
                 null -> return
-                "running" -> "running…"
-                else -> freshness
+                TestState.RUNNING -> "running…"
+                else -> freshness.wire
             }
             out.append("  $text", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
         }

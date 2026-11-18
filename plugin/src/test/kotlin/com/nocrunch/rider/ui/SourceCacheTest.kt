@@ -1,5 +1,6 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.engine.TestState
 import com.nocrunch.rider.engine.TestResultDto
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -12,7 +13,7 @@ class SourceCacheTest {
 
     private fun row(file: File, method: String = "Adds(System.Int32,System.Int32)") = TestResultDto(
         key = "p|C|$method|${file.name}", project = "p", type = "C", method = method, uid = "u", variant = "C.Adds(1, 2)",
-        displayName = "C.Adds(1, 2)", state = "passed", durationMs = null, message = null, stackTrace = null,
+        displayName = "C.Adds(1, 2)", state = TestState.PASSED, durationMs = null, message = null, stackTrace = null,
         filePath = file.path, line = 1,
     )
 

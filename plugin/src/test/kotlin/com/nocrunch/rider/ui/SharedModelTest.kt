@@ -1,6 +1,8 @@
 package com.nocrunch.rider.ui
 
-import com.nocrunch.rider.engine.BuildFinishedDto
+import com.nocrunch.rider.engine.TestState
+import com.nocrunch.rider.ProjectBuild
+import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestResultDto
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -13,20 +15,20 @@ class SharedModelTest {
     private val e2e = "tests/E2E/E2E.csproj"
     private val core = "src/Core/Core.csproj"
 
-    private fun t(project: String, type: String, method: String, state: String, lastOutcome: String? = null) = TestResultDto(
+    private fun t(project: String, type: String, method: String, state: TestState, lastOutcome: TestState? = null) = TestResultDto(
         key = "$project|$type|$method", project = project, type = type, method = method, uid = "$type.$method", variant = null,
         displayName = method, state = state, durationMs = 5.0, message = null, stackTrace = null,
         filePath = "/repo/${project.substringBeforeLast('/')}/${type.substringAfterLast('.')}.cs", line = 1, lastOutcome = lastOutcome,
     )
 
     private val tests = listOf(
-        t(unit, "Shop.Unit.Calc", "Adds", "passed"),
-        t(unit, "Shop.Unit.Calc", "Subtracts", "stale", lastOutcome = "failed"),
-        t(unit, "Shop.Unit.Pricing.Tax", "Vat", "failed"),
-        t(e2e, "Shop.E2E.Flow", "Checkout", "passed"),
-        t(e2e, "Shop.E2E.Flow", "Refund", "excluded"),
+        t(unit, "Shop.Unit.Calc", "Adds", TestState.PASSED),
+        t(unit, "Shop.Unit.Calc", "Subtracts", TestState.STALE, lastOutcome = TestState.FAILED),
+        t(unit, "Shop.Unit.Pricing.Tax", "Vat", TestState.FAILED),
+        t(e2e, "Shop.E2E.Flow", "Checkout", TestState.PASSED),
+        t(e2e, "Shop.E2E.Flow", "Refund", TestState.EXCLUDED),
     )
-    private val builds = mapOf(core to BuildFinishedDto(core, "failed", "error", null))
+    private val builds = mapOf(core to ProjectBuild(core, BuildStatus.FAILED, "error", null))
     private val rules = listOf(ExclusionRuleDto(e2e, "Shop.E2E.Flow", "Refund"))
 
     @Test

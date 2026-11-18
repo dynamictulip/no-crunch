@@ -1,6 +1,8 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.ExclusionRuleDto
+import com.nocrunch.rider.engine.TestState
 
 /** How tests are grouped under each project in the tool window. */
 enum class ViewMode(val title: String) {
@@ -37,8 +39,8 @@ sealed interface ViewNode {
     val counts: Counts get() = totals.counts
     val durationMs: Double? get() = totals.durationMs
     val manualCount: Int get() = totals.manualCount
-    val shownOutcome: String? get() = totals.shownOutcome
-    val freshness: String? get() = totals.freshness
+    val shownOutcome: TestState? get() = totals.shownOutcome
+    val freshness: TestState? get() = totals.freshness
     val isFresh: Boolean get() = freshness == null
 }
 
@@ -99,11 +101,11 @@ object TreeView {
 
     /** Splits off non-test projects whose build failed: they go in the pinned "Build errors" section, not among test projects. */
     fun splitBuildErrors(projects: List<ProjectNode>): Pair<List<ProjectNode>, List<ProjectNode>> =
-        projects.partition { !it.isTestProject && it.buildStatus in setOf("failed", "blocked") }
+        projects.partition { !it.isTestProject && it.buildStatus?.isBroken == true }
 
-    private fun buildRank(status: String?): Int = when (status) {
-        "failed" -> 0
-        "blocked" -> 1
+    private fun buildRank(status: BuildStatus?): Int = when (status) {
+        BuildStatus.FAILED -> 0
+        BuildStatus.BLOCKED -> 1
         else -> 2
     }
 
@@ -142,9 +144,9 @@ object TreeView {
     /** Lower is worse: failing, failing but stale, not run yet, passing but stale, passing, skipped, excluded. */
     fun statusRank(t: TestNode): Int = when {
         t.excluded && !t.manual -> 6
-        t.shownOutcome == "failed" -> if (t.freshness == null) 0 else 1
+        t.shownOutcome == TestState.FAILED -> if (t.freshness == null) 0 else 1
         t.shownOutcome == null -> 2
-        t.shownOutcome == "passed" -> if (t.freshness == null) 4 else 3
+        t.shownOutcome == TestState.PASSED -> if (t.freshness == null) 4 else 3
         else -> 5
     }
 

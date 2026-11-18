@@ -1,6 +1,7 @@
 package com.nocrunch.rider.ui
 
 import com.nocrunch.rider.EngineUiState
+import com.nocrunch.rider.engine.EngineState
 
 /** Human-readable wording for the engine state, used by the tool window and status bar. */
 /** The view filter that leaves the tree empty although there are tests. */
@@ -20,24 +21,24 @@ enum class HiddenBy {
 
 object StatusText {
     fun describe(s: EngineUiState): String = when (s.state) {
-        "starting" -> "Starting No Crunch…"
-        "syncing" -> "Syncing changes…"
-        "building" -> "Building ${projects(s.queued)}…"
-        "testing" -> "Running tests in ${projects(s.queued)}…"
-        "idle" -> "Idle"
-        "paused" -> "Paused"
-        "stopped" -> "Stopped"
-        "error" -> "Error: ${s.error ?: "unknown"}"
-        else -> s.state.replaceFirstChar { it.uppercase() }
+        EngineState.STARTING -> "Starting No Crunch…"
+        EngineState.SYNCING -> "Syncing changes…"
+        EngineState.BUILDING -> "Building ${projects(s.queued)}…"
+        EngineState.TESTING -> "Running tests in ${projects(s.queued)}…"
+        EngineState.IDLE -> "Idle"
+        EngineState.PAUSED -> "Paused"
+        EngineState.STOPPED -> "Stopped"
+        EngineState.ERROR -> "Error: ${s.error ?: "unknown"}"
+        EngineState.UNKNOWN -> "Unknown"
     }
 
     /** Shown in the tree while it has nothing to show: no tests yet, or a view filter is hiding them all. */
     fun emptyTree(s: EngineUiState, hiddenBy: HiddenBy? = null): String = when {
-        s.state == "error" -> "No Crunch error: ${s.error ?: "unknown"}"
+        s.state == EngineState.ERROR -> "No Crunch error: ${s.error ?: "unknown"}"
         hiddenBy == HiddenBy.FAILURES_ONLY -> "No failing tests"
         hiddenBy == HiddenBy.EXCLUDED -> "All tests are excluded"
-        s.state in setOf("building", "syncing", "testing") -> describe(s) + " tests appear once they're built"
-        s.state == "idle" -> "No tests found"
+        s.state.isUpdating -> describe(s) + " tests appear once they're built"
+        s.state == EngineState.IDLE -> "No tests found"
         else -> describe(s)
     }
 
@@ -46,14 +47,14 @@ object StatusText {
      * failing rows count once, and excluded tests only count while they hold a current manual result.
      */
     fun widget(s: EngineUiState, counts: Counts, brokenBuilds: Int): String = when {
-        s.state == "error" -> "No Crunch: error"
-        s.state == "paused" -> "No Crunch: paused"
-        s.state == "building" || s.state == "syncing" -> "No Crunch: building…"
-        s.state == "testing" -> "No Crunch: testing…"
+        s.state == EngineState.ERROR -> "No Crunch: error"
+        s.state == EngineState.PAUSED -> "No Crunch: paused"
+        s.state == EngineState.BUILDING || s.state == EngineState.SYNCING -> "No Crunch: building…"
+        s.state == EngineState.TESTING -> "No Crunch: testing…"
         brokenBuilds > 0 -> "No Crunch: ✖ build"
         counts.failed > 0 -> "No Crunch: ✖ ${counts.failed}"
-        s.state == "starting" -> "No Crunch: starting…"
-        s.state == "stopped" -> "No Crunch"
+        s.state == EngineState.STARTING -> "No Crunch: starting…"
+        s.state == EngineState.STOPPED -> "No Crunch"
         else -> "No Crunch: ✔"
     }
 

@@ -1,6 +1,6 @@
 package com.nocrunch.rider.engine
 
-/** Wire types for the engine's JSON-RPC protocol (camelCase; enums as camelCase strings). Keep in sync with EngineServer.cs. */
+/** Wire types for the engine's JSON-RPC protocol (camelCase; enums as camelCase strings, see [WireEnum]). Keep in sync with EngineServer.cs. */
 
 const val PROTOCOL_VERSION = 1
 
@@ -32,29 +32,27 @@ data class TestResultDto(
     val uid: String,
     val variant: String?,
     val displayName: String,
-    /** discovered, queued, running, passed, failed, skipped, excluded, stale */
-    val state: String,
+    val state: TestState,
     val durationMs: Double?,
     val message: String?,
     val stackTrace: String?,
     val filePath: String?,
     val line: Int?,
-    /** auto (continuous run) or manual (the user asked for it). */
-    val runKind: String? = "auto",
+    /** Continuous run or one the user asked for. */
+    val runKind: RunKind? = RunKind.AUTO,
     /** The last finished outcome (passed/failed/skipped) while the test is stale, queued, running or excluded. */
-    val lastOutcome: String? = null,
+    val lastOutcome: TestState? = null,
     /** Set on a data row of a theory whose rows are only known at run time: the theory's key. */
     val theoryKey: String? = null,
 )
 
-/** status: succeeded, failed, blocked, cancelled */
-data class BuildFinishedDto(val project: String, val status: String, val output: String, val blockedBy: String?)
+/** status: succeeded, failed, blocked or cancelled. */
+data class BuildFinishedDto(val project: String, val status: BuildStatus, val output: String, val blockedBy: String?)
 
-/** status: completed, cancelled, crashed, unsupportedMtpVersion, unsupportedNotMtp */
-data class RunFinishedDto(val project: String, val status: String, val error: String?)
+data class RunFinishedDto(val project: String, val status: RunStatus, val error: String?)
 
-/** state: idle, syncing, building, testing, paused */
-data class StateChangedDto(val state: String, val queued: Int)
+/** state: idle, syncing, building, testing or paused. */
+data class StateChangedDto(val state: EngineState, val queued: Int)
 
 data class TestsDiscoveredDto(val project: String, val tests: List<TestResultDto>)
 
