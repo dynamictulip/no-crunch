@@ -538,6 +538,11 @@ public sealed class EngineCore(
             }, ct);
         if (!ct.IsCancellationRequested && outcome.Status == ProjectRunStatus.Completed && rowsSeen.Count > 0)
             await events.TestsDiscovered(project.RepoRelativePath, SettleTheories(project.RepoRelativePath, rowsSeen, Tag));
+        if (!ct.IsCancellationRequested && outcome.Status == ProjectRunStatus.Crashed)
+        {
+            var settled = SettleCrashedRun(project.RepoRelativePath, outcome.Error);
+            if (settled.Count > 0) await events.TestResults(settled);
+        }
         if (!ct.IsCancellationRequested) await events.ProjectRunFinished(outcome);
         if (!ct.IsCancellationRequested && outcome.Status != ProjectRunStatus.Cancelled)
             lock (_lock) progress.Done.Add(project.RepoRelativePath);
@@ -575,6 +580,29 @@ public sealed class EngineCore(
                 foreach (var key in gone) _results.Remove(key);
             }
             return _results.Values.Where(r => r.Id.Project == project).ToList();
+        }
+    }
+
+    /// <summary>
+    /// After the test host died, nothing more will be reported for this run: tests it was running fail (the crash is
+    /// the likeliest cause, and the user needs to see it), and tests it never reached go back to stale with their last outcome.
+    /// </summary>
+    private List<TestResultUpdate> SettleCrashedRun(string project, string? error)
+    {
+        lock (_lock)
+        {
+            var settled = _results.Values
+                .Where(r => r.Id.Project == project && r.State is TestState.Running or TestState.Queued)
+                .Select(r => r.State == TestState.Running
+                    ? r with
+                    {
+                        State = TestState.Failed, LastOutcome = null, DurationMs = null, StackTrace = null,
+                        Message = "The test host crashed while this test was running" + (error is null ? "." : ": " + error),
+                    }
+                    : CarryForward(r with { State = TestState.Stale }, r))
+                .ToList();
+            foreach (var r in settled) _results[r.Id.Key] = r;
+            return settled;
         }
     }
 

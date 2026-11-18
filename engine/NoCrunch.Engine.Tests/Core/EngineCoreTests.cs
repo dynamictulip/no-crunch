@@ -106,6 +106,8 @@ public class EngineCoreTests
         public Dictionary<string, (string variant, TestState state)[]> Rows { get; } = new();
         /// <summary>Runs after discovery, before the tests execute; cancelling it cancels the run, like the real runner.</summary>
         public Func<string, CancellationToken, Task> RunGate { get; set; } = (_, _) => Task.CompletedTask;
+        /// <summary>When set, the test host "crashes" while running the test with this method name.</summary>
+        public string? CrashWhileRunning { get; set; }
 
         public async Task<ProjectRunOutcome> RunAsync(ProjectInfo project, Func<TestId, bool> shouldRun,
             Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct)
@@ -115,6 +117,12 @@ public class EngineCoreTests
             await onUpdates(ids.Select(t => U(t.id, shouldRun(t.id) ? TestState.Queued : TestState.Excluded)).ToList());
             try { await RunGate(project.RepoRelativePath, ct); }
             catch (OperationCanceledException) { return new ProjectRunOutcome(project.RepoRelativePath, ProjectRunStatus.Cancelled, null); }
+            if (CrashWhileRunning is { } crashing && ids.FirstOrDefault(t => t.id.Method == crashing) is { id: not null } victim)
+            {
+                // The host dies part-way: one test has started, the rest are still queued.
+                await onUpdates([U(victim.id, TestState.Running)]);
+                return new ProjectRunOutcome(project.RepoRelativePath, ProjectRunStatus.Crashed, "Test host exited with code 134");
+            }
             var ran = ids.Where(t => shouldRun(t.id)).ToList();
             foreach (var t in ran) Executed.Add(t.id.Key);
             if (ran.Count > 0)
@@ -865,6 +873,26 @@ public class EngineCoreTests
         Assert.AreEqual(1, h.Build.Builds.Count, "the cycle is not rebuilt and rerun because saving failed");
         Assert.IsTrue(h.Events.Log.Any(l => l.StartsWith("warning:") && l.Contains("save")), string.Join(" | ", h.Events.Log));
         Assert.IsFalse(h.Events.Log.Any(l => l.StartsWith("error:")), string.Join(" | ", h.Events.Log));
+    }
+
+    [TestMethod]
+    public async Task When_the_test_host_crashes_the_running_test_fails_and_queued_ones_go_back_to_stale()
+    {
+        var h = await CreateAsync();
+        Drain(h);
+        h.Tests.CrashWhileRunning = "A";
+
+        h.Core.FilesChanged([Abs(h, "tests/Core.Tests/CalcTests.cs")]);
+        await h.Events.WaitIdleAsync();
+
+        var last = h.Events.Results.Reverse().DistinctBy(r => r.Id.Key).ToDictionary(r => r.Id.Method!);
+        Assert.AreEqual(TestState.Failed, last["A"].State, "A was running when the host died");
+        StringAssert.Contains(last["A"].Message, "Test host exited with code 134");
+        Assert.AreEqual(TestState.Stale, last["B"].State, "B never ran: no new result");
+        Assert.AreEqual(TestState.Passed, last["B"].LastOutcome, "B still shows its previous outcome");
+        var saved = h.Store.Load();
+        Assert.AreEqual(TestState.Failed, saved[$"{CoreTests}|T|A"].State);
+        Assert.AreEqual(TestState.Stale, saved[$"{CoreTests}|T|B"].State);
     }
 
     [TestMethod]
