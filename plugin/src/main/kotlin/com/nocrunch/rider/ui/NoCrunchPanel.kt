@@ -210,7 +210,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 service.setExcluded(rules, excluded = !node.isChecked)
             }
         })
-        tree.addTreeSelectionListener { showDetails(tree.lastSelectedPathComponent as? CheckedTreeNode) }
+        // While the tree updates, render() refreshes the details once at the end instead.
+        tree.addTreeSelectionListener { if (!rebuilding) showDetails(tree.lastSelectedPathComponent as? CheckedTreeNode) }
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) (selectedNode()?.userObject as? TestNode)?.let { navigate(it) }
@@ -262,35 +263,43 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         tree.emptyText.text = StatusText.emptyTree(s.state)
         if (model == lastModel) return
         lastModel = model
+        val failuresBefore = anyFailures
         anyFailures = model.any { it.counts.failed > 0 }
+        val treeModel = tree.model as DefaultTreeModel
         val expanded = TreeUtil.collectExpandedPaths(tree).map { pathKey(it) }.toSet()
-        val selected = tree.selectionPath?.let { pathKey(it) }
+        val selected = tree.selectionPaths.orEmpty().map { pathKey(it) }.toSet()
+        // The selection listener stays quiet while rows change; the details pane is refreshed once at the end.
         rebuilding = true
         try {
-            root.removeAllChildren()
-            val (buildErrors, testProjects) = TreeView.splitBuildErrors(model)
-            // Broken non-test projects are pinned above the test projects whatever the sort.
-            if (buildErrors.isNotEmpty()) {
-                val group = CheckedTreeNode(BuildErrorsGroup(buildErrors.size)).apply { isEnabled = false }
-                for (p in buildErrors) group.add(CheckedTreeNode(p).apply { isEnabled = false })
-                root.add(group)
-            }
-            for (p in TreeView.sortProjects(testProjects, sortMode)) {
-                val pn = CheckedTreeNode(p).apply { isChecked = !p.excluded; isEnabled = choosingTests }
-                for (v in TreeView.of(p, viewMode, sortMode)) pn.add(treeNode(v))
-                root.add(pn)
-            }
-            (tree.model as DefaultTreeModel).reload()
+            // Updated in place, not rebuilt: reloading the model cleared the selection (and the details pane with
+            // it), collapsed a multi-selection to one row and re-expanded everything after Collapse All.
+            TreeSync.sync(treeModel, root, specs(model))
+            // The green tick highlights depend on whether anything fails anywhere, so every row may look different.
+            if (anyFailures != failuresBefore) TreeUtil.treeNodeTraverser(root).forEach { treeModel.nodeChanged(it as CheckedTreeNode) }
+            // A row that moved (sorting by status or run time) was taken out and put back, which collapses and
+            // deselects it; put that back.
+            val reselect = mutableListOf<TreePath>()
             TreeUtil.treeNodeTraverser(root).forEach { node ->
                 val path = TreePath((node as CheckedTreeNode).path)
                 val key = pathKey(path)
-                if (key in expanded || (expanded.isEmpty() && path.pathCount <= 2)) tree.expandPath(path)
-                if (key == selected) tree.selectionPath = path
+                if (key in expanded && !tree.isExpanded(path)) tree.expandPath(path)
+                if (key in selected) reselect += path
+            }
+            if (reselect.isNotEmpty() && reselect.size != tree.selectionCount) tree.selectionPaths = reselect.toTypedArray()
+            // Projects start expanded the first time there's anything to show; after that expansion is the user's.
+            if (firstLoad && root.childCount > 0) {
+                firstLoad = false
+                for (i in 0 until root.childCount) tree.expandPath(TreePath(arrayOf(root, root.getChildAt(i))))
             }
         } finally {
             rebuilding = false
         }
+        // The selected row's results may have changed; the pane leaves itself alone if its text hasn't.
+        showDetails(selectedNode())
     }
+
+    /** Set until the tree first shows something, so projects are expanded once rather than whenever nothing is. */
+    private var firstLoad = true
 
     private val sortMode: SortMode
         get() = SortMode.entries.firstOrNull { it.name == settings.state.sortMode } ?: SortMode.NAME
@@ -301,32 +310,27 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private val viewMode: ViewMode
         get() = ViewMode.entries.firstOrNull { it.name == settings.state.viewMode } ?: ViewMode.CLASSES
 
-    /** Tests keep their [TestNode] as the row object; classes and groups use their [ViewNode]. */
-    private fun treeNode(v: ViewNode): CheckedTreeNode = when (v) {
-        is TestView -> CheckedTreeNode(v.node).apply {
-            isChecked = !v.excluded; isEnabled = choosingTests && !v.locked
-            v.node.rows.forEach { add(CheckedTreeNode(it).apply { isChecked = !it.excluded; isEnabled = false }) }
-        }
-        is ClassView -> CheckedTreeNode(v).apply {
-            isChecked = !v.excluded; isEnabled = choosingTests && !v.locked
-            v.children.forEach { add(treeNode(it)) }
-        }
-        is GroupView -> CheckedTreeNode(v).apply {
-            isChecked = !v.excluded; isEnabled = choosingTests && !v.locked
-            v.children.forEach { add(treeNode(it)) }
+    /** The rows the tree should show. Broken non-test projects are pinned above the test projects whatever the sort. */
+    private fun specs(model: List<ProjectNode>): List<TreeSpec> {
+        val (buildErrors, testProjects) = TreeView.splitBuildErrors(model)
+        val errors = if (buildErrors.isEmpty()) emptyList() else listOf(
+            TreeSpec(BUILD_ERRORS_KEY, BuildErrorsGroup(buildErrors.size), enabled = false,
+                children = buildErrors.map { TreeSpec(it.path, it, enabled = false) }),
+        )
+        return errors + TreeView.sortProjects(testProjects, sortMode).map { p ->
+            TreeSpec(p.path, p, checked = !p.excluded, enabled = choosingTests, children = TreeView.of(p, viewMode, sortMode).map(::spec))
         }
     }
 
-    private fun pathKey(path: TreePath): String = path.path.joinToString("/") {
-        when (val o = (it as? CheckedTreeNode)?.userObject) {
-            is ProjectNode -> o.path
-            is BuildErrorsGroup -> "build-errors"
-            is ClassView -> o.node.type
-            is GroupView -> "${o.kind}:${o.label}"
-            is TestNode -> o.dto.key
-            else -> "root"
-        }
+    /** Tests keep their [TestNode] as the row object; classes and groups use their [ViewNode]. */
+    private fun spec(v: ViewNode): TreeSpec = when (v) {
+        is TestView -> TreeSpec(v.node.dto.key, v.node, !v.excluded, choosingTests && !v.locked,
+            v.node.rows.map { TreeSpec(it.dto.key, it, checked = !it.excluded, enabled = false) })
+        is ClassView -> TreeSpec(v.node.type, v, !v.excluded, choosingTests && !v.locked, v.children.map(::spec))
+        is GroupView -> TreeSpec("${v.kind}:${v.label}", v, !v.excluded, choosingTests && !v.locked, v.children.map(::spec))
     }
+
+    private fun pathKey(path: TreePath): String = path.path.joinToString("/") { (it as? KeyedTreeNode)?.key ?: "root" }
 
     private fun selectedNode() = tree.lastSelectedPathComponent as? CheckedTreeNode
 
@@ -554,6 +558,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private companion object {
         const val RESULTS_CARD = "results"
         const val PAUSED_CARD = "paused"
+        const val BUILD_ERRORS_KEY = "build-errors"
         /** Rider's editor context action that debugs the test(s) at the caret. */
         const val RIDER_DEBUG_TEST_ACTION = "RiderUnitTestDebugContextAction"
         const val DEBUG_ATTEMPTS = 12
