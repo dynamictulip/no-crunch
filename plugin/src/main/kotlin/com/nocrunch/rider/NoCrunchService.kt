@@ -23,11 +23,11 @@ import com.nocrunch.rider.engine.TestsDiscoveredDto
 import com.nocrunch.rider.exclusions.ExclusionStore
 import com.nocrunch.rider.files.MirrorFolderExcluder
 import com.nocrunch.rider.files.RepoPaths
+import com.nocrunch.rider.lifecycle.EngineSlot
+import com.nocrunch.rider.lifecycle.FileChangeBatcher
 import com.nocrunch.rider.settings.NoCrunchSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -68,20 +68,19 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
 
     @Volatile var repoRoot: String? = null
         private set
-    @Volatile private var client: EngineClient? = null
-    private var process: EngineProcess? = null
+    private val engine = EngineSlot<EngineProcess, EngineClient>()
+    private val client: EngineClient? get() = engine.client
     private var exclusionStore: ExclusionStore? = null
     private val crashTimes = ArrayDeque<Long>()
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val saveDispatcher = Dispatchers.IO.limitedParallelism(1)
 
-    private val pendingFiles = LinkedHashSet<String>()
-    private var flushJob: Job? = null
+    private val fileChanges = FileChangeBatcher(cs, 100) { batch -> send("filesChanged", mapOf("paths" to batch)) }
 
     /** Idempotent: safe to call from startup and whenever the tool window opens. */
     @Synchronized
     fun start() {
-        if (process != null) return
+        if (!engine.canStart) return
         val solution = findSolution() ?: run {
             _state.value = EngineUiState("error", error = "No .sln or .slnx found for this project.")
             return
@@ -97,13 +96,19 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
 
         val settings = NoCrunchSettings.getInstance(project)
         val dotnet = settings.resolveDotnet()
-        val proc = EngineProcess(dotnet, engineDll) { code -> onEngineExit(code) }
-        process = proc
+        lateinit var proc: EngineProcess
+        proc = EngineProcess(dotnet, engineDll) { code -> onEngineExit(proc, code) }
+        if (!engine.begin(proc)) return
         cs.launch(Dispatchers.IO) {
             try {
+                // The project may have closed, or a restart overtaken us, before this ran; then don't spawn at all.
+                if (!engine.isCurrent(proc)) return@launch
                 val c = proc.start()
-                c.onNotification(::onNotification)
-                client = c
+                // Once this engine is no longer current (failed, superseded), what it says must not touch the UI.
+                c.onNotification { method, params -> if (engine.isCurrent(proc)) onNotification(proc, c.gson, method, params) }
+                // Overtaken while spawning: this engine belongs to nobody, so stop it. (initialize below is bounded by
+                // the client's request timeout.)
+                if (!engine.adopt(proc, c)) { proc.stop(); return@launch }
                 val s = settings.state
                 val result = c.request("initialize", InitializeParams(solution.toString(), dotnet, s.maxParallel, s.debounceMs),
                     InitializeResult::class.java).get()
@@ -111,10 +116,24 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
                 repoRoot = result.repoRoot
                 c.notify("setExclusions", mapOf("rules" to _exclusions.value))
             } catch (e: Exception) {
-                log.warn("No Crunch engine failed to start", e)
-                _state.value = EngineUiState("error", error = e.message)
+                failStart(proc, e)
             }
         }
+    }
+
+    /**
+     * Startup failed (dotnet missing, initialize failed or timed out, protocol mismatch). The engine may well still be
+     * running, so stop it, and free the slot so a later start() can retry. The error stays until then: the stopped
+     * engine's notifications are ignored and stopping it means its exit doesn't trigger a restart.
+     */
+    private fun failStart(proc: EngineProcess, e: Exception) {
+        // Under the start() lock, so a start() that follows straight after can't have its "starting" overwritten.
+        val wasCurrent = synchronized(this) {
+            engine.retire(proc).also { if (it) _state.value = EngineUiState("error", error = e.message ?: e.toString()) }
+        }
+        if (wasCurrent) log.warn("No Crunch engine failed to start", e)
+        else log.info("Abandoned No Crunch engine start ended: $e")
+        proc.stop()
     }
 
     /** Stops and starts the engine off the UI thread (stopping waits for the engine to shut down). */
@@ -151,15 +170,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
         val root = repoRoot ?: return
         val relevant = RepoPaths.relevant(paths, root)
         if (relevant.isEmpty()) return
-        synchronized(pendingFiles) {
-            pendingFiles += relevant
-            if (flushJob?.isActive == true) return
-            flushJob = cs.launch(Dispatchers.IO) {
-                delay(100)
-                val batch = synchronized(pendingFiles) { pendingFiles.toList().also { pendingFiles.clear() } }
-                send("filesChanged", mapOf("paths" to batch))
-            }
-        }
+        fileChanges.add(relevant)
     }
 
     private fun send(method: String, params: Any? = null) {
@@ -171,10 +182,12 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
         }
     }
 
-    private fun onNotification(method: String, params: JsonObject) {
-        val gson = client?.gson ?: return
+    private fun onNotification(from: EngineProcess, gson: com.google.gson.Gson, method: String, params: JsonObject) {
         when (method) {
-            "stateChanged" -> gson.fromJson(params, StateChangedDto::class.java).let { _state.value = EngineUiState(it.state, it.queued) }
+            "stateChanged" -> gson.fromJson(params, StateChangedDto::class.java).let {
+                // Checked again under the lock failStart() sets its error under, so a late update can't replace it.
+                synchronized(this) { if (engine.isCurrent(from)) _state.value = EngineUiState(it.state, it.queued) }
+            }
             "projectBuildStarted" -> {
                 val project = params["project"].asString
                 _builds.update { it + (project to BuildFinishedDto(project, "building", "", null)) }
@@ -190,9 +203,9 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
         }
     }
 
-    private fun onEngineExit(code: Int) {
-        client = null
-        process = null
+    private fun onEngineExit(proc: EngineProcess, code: Int) {
+        // Already dealt with: stopped, failed to start, or replaced by a newer engine.
+        if (!engine.retire(proc)) return
         val now = System.currentTimeMillis()
         val recent = synchronized(crashTimes) {
             crashTimes.addLast(now)
@@ -208,10 +221,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     }
 
     private fun stopEngine() {
-        val p = process
-        process = null
-        client = null
-        p?.stop()
+        engine.clear()?.stop()
         _state.value = EngineUiState("stopped")
     }
 
@@ -230,9 +240,8 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
 
     /** Project closing: shut the engine down in the background so closing never waits on it. */
     override fun dispose() {
-        val p = process ?: return
-        process = null
-        client = null
+        // From here on nothing can start, and a start still spawning stops its own engine.
+        val p = engine.dispose() ?: return
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread { p.stop() }
     }
 
