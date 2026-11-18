@@ -14,6 +14,10 @@ class NoCrunchConfigurable(private val project: Project) : BoundConfigurable("No
         return panel {
             row("Delay after last change (ms):") { intTextField(0..10_000).bindIntText({ state.debounceMs }, { state.debounceMs = it }) }
             row("Max test projects in parallel (0 = auto):") { intTextField(0..64).bindIntText({ state.maxParallel }, { state.maxParallel = it }) }
+            row("Test timeout (seconds, 0 = none):") {
+                intTextField(0..86_400).bindIntText({ state.testTimeoutSeconds }, { state.testTimeoutSeconds = it })
+                    .comment("A test run that reports no result for this long is stopped and its unfinished tests fail.")
+            }
             row("dotnet executable (blank = auto):") {
                 textField().bindText({ state.dotnetPath.orEmpty() }, { state.dotnetPath = it })
                     .comment("Changes apply after the engine restarts.")

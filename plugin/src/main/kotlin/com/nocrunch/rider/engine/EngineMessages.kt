@@ -4,7 +4,14 @@ package com.nocrunch.rider.engine
 
 const val PROTOCOL_VERSION = 1
 
-data class InitializeParams(val solutionPath: String, val dotnetPath: String?, val maxParallel: Int, val debounceMs: Int)
+/** [testTimeoutSeconds]: stop a test run that reports nothing for this long and fail its unfinished tests; 0 = no timeout, null = engine default (30). */
+data class InitializeParams(
+    val solutionPath: String,
+    val dotnetPath: String?,
+    val maxParallel: Int,
+    val debounceMs: Int,
+    val testTimeoutSeconds: Int? = null,
+)
 
 data class InitializeResult(val protocolVersion: Int, val repoRoot: String, val mirrorRoot: String)
 

@@ -93,6 +93,16 @@ class EngineClientTest {
     }
 
     @Test
+    fun initialize_sends_the_test_timeout() {
+        val pipe = Pipe()
+        val client = EngineClient(pipe.clientIn, pipe.clientOut)
+        client.request("initialize", InitializeParams("/s.slnx", "dotnet", 2, 300, testTimeoutSeconds = 45), InitializeResult::class.java)
+        val sent = JsonParser.parseString(pipe.clientOut.toString(Charsets.UTF_8).substringAfter("\r\n\r\n")).asJsonObject
+        assertEquals(45, sent["params"].asJsonObject["testTimeoutSeconds"].asInt)
+        client.close()
+    }
+
+    @Test
     fun request_fails_on_error_response() {
         val pipe = Pipe()
         val client = EngineClient(pipe.clientIn, pipe.clientOut)

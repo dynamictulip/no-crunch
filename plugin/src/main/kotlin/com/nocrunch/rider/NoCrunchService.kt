@@ -110,7 +110,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
                 // the client's request timeout.)
                 if (!engine.adopt(proc, c)) { proc.stop(); return@launch }
                 val s = settings.state
-                val result = c.request("initialize", InitializeParams(solution.toString(), dotnet, s.maxParallel, s.debounceMs),
+                val result = c.request("initialize", InitializeParams(solution.toString(), dotnet, s.maxParallel, s.debounceMs, s.testTimeoutSeconds),
                     InitializeResult::class.java).get()
                 if (result.protocolVersion != PROTOCOL_VERSION) error("Engine protocol ${result.protocolVersion}, plugin expects $PROTOCOL_VERSION")
                 repoRoot = result.repoRoot

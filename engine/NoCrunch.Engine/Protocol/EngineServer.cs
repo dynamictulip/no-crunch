@@ -10,7 +10,10 @@ using StreamJsonRpc;
 
 namespace NoCrunch.Engine.Protocol;
 
-public sealed record InitializeParams(string SolutionPath, string? DotnetPath, int MaxParallel, int DebounceMs);
+/// <param name="TestTimeoutSeconds">
+/// Stop a test run that reports nothing for this many seconds and fail its unfinished tests. Absent = 30; 0 = no timeout.
+/// </param>
+public sealed record InitializeParams(string SolutionPath, string? DotnetPath, int MaxParallel, int DebounceMs, int? TestTimeoutSeconds = null);
 public sealed record InitializeResult(int ProtocolVersion, string RepoRoot, string MirrorRoot);
 public sealed record FilesChangedParams(string[] Paths);
 public sealed record SetExclusionsParams(ExclusionRule[] Rules);
@@ -32,10 +35,20 @@ public sealed record TestResultDto(
 public sealed class EngineServer : IEngineEvents, IAsyncDisposable
 {
     public const int ProtocolVersion = 1;
+    public static readonly TimeSpan DefaultTestTimeout = TimeSpan.FromSeconds(30);
 
     private readonly TaskCompletionSource _shutdown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly Func<InitializeParams, IEngineEvents, (EngineCore Core, InitializeResult Result)> _createCore;
+    /// <summary>Held while initializing (and shutting down), so only one core is ever started.</summary>
+    private readonly SemaphoreSlim _initLock = new(1, 1);
     private JsonRpc? _rpc;
-    private EngineCore? _core;
+    private volatile EngineCore? _core;
+
+    public EngineServer() : this(CreateCore) { }
+
+    /// <param name="createCore">Builds the (not yet started) core for an <c>initialize</c> call; tests swap in fakes.</param>
+    internal EngineServer(Func<InitializeParams, IEngineEvents, (EngineCore Core, InitializeResult Result)> createCore) =>
+        _createCore = createCore;
 
     public Task ShutdownRequested => _shutdown.Task;
 
@@ -54,51 +67,104 @@ public sealed class EngineServer : IEngineEvents, IAsyncDisposable
     [JsonRpcMethod("initialize", UseSingleObjectParameterDeserialization = true)]
     public async Task<InitializeResult> InitializeAsync(InitializeParams p)
     {
-        if (_core is not null) throw new InvalidOperationException("Already initialized.");
+        await _initLock.WaitAsync();
+        try
+        {
+            if (_core is not null) throw new InvalidOperationException("Already initialized.");
+            var (core, result) = _createCore(p, this);
+            try
+            {
+                await core.StartAsync(CancellationToken.None);
+            }
+            catch
+            {
+                // Leave nothing half-started behind, so initialize can be called again.
+                await core.DisposeAsync();
+                throw;
+            }
+            _core = core;
+            return result;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    /// <summary>The test timeout the plugin asked for: absent = <see cref="DefaultTestTimeout"/>, 0 (or less) = none.</summary>
+    internal static TimeSpan? TestTimeout(InitializeParams p) => p.TestTimeoutSeconds switch
+    {
+        null => DefaultTestTimeout,
+        <= 0 => null,
+        { } s => TimeSpan.FromSeconds(s),
+    };
+
+    private static (EngineCore, InitializeResult) CreateCore(InitializeParams p, IEngineEvents events)
+    {
         var layout = RepoLayout.Resolve(p.SolutionPath);
         var map = new PathMap(layout.RepoRoot, layout.MirrorRoot);
         var dotnet = string.IsNullOrWhiteSpace(p.DotnetPath) ? "dotnet" : p.DotnetPath;
         var runner = new ProcessRunner();
         var query = new DotnetMsBuildQuery(runner, map, dotnet);
-        _core = new EngineCore(
+        var core = new EngineCore(
             new SharedMirrorWorkspace(layout, map),
             ct => ProjectGraph.LoadAsync(layout, query, ct),
             new ProjectBuilder(runner, map, dotnet),
-            new MtpTestRunner(map),
+            new MtpTestRunner(map, TestTimeout(p)),
             new ResultStore(Path.Combine(layout.StateDir, "results.json")),
-            this, map, layout.SolutionPath);
-        if (p.DebounceMs > 0) _core.Debounce = TimeSpan.FromMilliseconds(p.DebounceMs);
-        if (p.MaxParallel > 0) _core.MaxParallelTestProjects = p.MaxParallel;
-        await _core.StartAsync(CancellationToken.None);
-        return new InitializeResult(ProtocolVersion, layout.RepoRoot, layout.MirrorRoot);
+            events, map, layout.SolutionPath);
+        if (p.DebounceMs > 0) core.Debounce = TimeSpan.FromMilliseconds(p.DebounceMs);
+        if (p.MaxParallel > 0) core.MaxParallelTestProjects = p.MaxParallel;
+        return (core, new InitializeResult(ProtocolVersion, layout.RepoRoot, layout.MirrorRoot));
     }
 
+    // Notifications before initialize has finished are ignored (with a warning): the core starts with a full
+    // reconcile and a run of everything, so nothing they asked for is lost by dropping them.
+
     [JsonRpcMethod("filesChanged", UseSingleObjectParameterDeserialization = true)]
-    public void FilesChanged(FilesChangedParams p) => Core.FilesChanged(p.Paths);
+    public void FilesChanged(FilesChangedParams p) => WithCore("filesChanged", c => c.FilesChanged(p.Paths));
 
     [JsonRpcMethod("setExclusions", UseSingleObjectParameterDeserialization = true)]
-    public void SetExclusions(SetExclusionsParams p) => Core.SetExclusions(new ExclusionSet(p.Rules));
+    public void SetExclusions(SetExclusionsParams p) => WithCore("setExclusions", c => c.SetExclusions(new ExclusionSet(p.Rules)));
 
     [JsonRpcMethod("runAll")]
-    public void RunAll() => Core.RunAll();
+    public void RunAll() => WithCore("runAll", c => c.RunAll());
 
     [JsonRpcMethod("runTests", UseSingleObjectParameterDeserialization = true)]
-    public void RunTests(RunTestsParams p) => Core.RunTests(p.Keys);
+    public void RunTests(RunTestsParams p) => WithCore("runTests", c => c.RunTests(p.Keys));
 
     [JsonRpcMethod("pause")]
-    public void Pause() => Core.Pause();
+    public void Pause() => WithCore("pause", c => c.Pause());
 
     [JsonRpcMethod("resume")]
-    public void Resume() => Core.Resume();
+    public void Resume() => WithCore("resume", c => c.Resume());
 
     [JsonRpcMethod("shutdown")]
     public async Task ShutdownAsync()
     {
-        if (_core is not null) await _core.DisposeAsync();
+        await DisposeCoreAsync();
         _shutdown.TrySetResult();
     }
 
-    private EngineCore Core => _core ?? throw new InvalidOperationException("Call initialize first.");
+    private void WithCore(string method, Action<EngineCore> action)
+    {
+        if (_core is { } core) action(core);
+        else _ = ((IEngineEvents)this).Log("warning", $"Ignored '{method}': the engine is not initialized yet.");
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        // Wait for an initialize in progress, so its core is disposed too rather than started after shutdown.
+        await _initLock.WaitAsync();
+        try
+        {
+            if (_core is { } core) await core.DisposeAsync();
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
 
     // ---- notifications -----------------------------------------------------------------------------------
 
@@ -131,8 +197,5 @@ public sealed class EngineServer : IEngineEvents, IAsyncDisposable
         catch (Exception e) when (e is ConnectionLostException or ObjectDisposedException) { }
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_core is not null) await _core.DisposeAsync();
-    }
+    public async ValueTask DisposeAsync() => await DisposeCoreAsync();
 }
