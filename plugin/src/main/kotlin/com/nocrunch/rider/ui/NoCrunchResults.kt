@@ -5,7 +5,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.nocrunch.rider.EngineUiState
 import com.nocrunch.rider.NoCrunchService
-import com.nocrunch.rider.engine.BuildFinishedDto
+import com.nocrunch.rider.ProjectBuild
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.RunFinishedDto
 import com.nocrunch.rider.engine.TestResultDto
@@ -24,7 +24,7 @@ import kotlinx.coroutines.flow.stateIn
 /** Everything the UI shows for one batch of engine updates. */
 data class ResultsSnapshot(
     val tests: Map<String, TestResultDto>,
-    val builds: Map<String, BuildFinishedDto>,
+    val builds: Map<String, ProjectBuild>,
     val runs: Map<String, RunFinishedDto>,
     val rules: List<ExclusionRuleDto>,
     val state: EngineUiState,
@@ -74,7 +74,7 @@ class NoCrunchResults(project: Project, scope: CoroutineScope) {
 
     private data class Input(
         val tests: Map<String, TestResultDto>,
-        val builds: Map<String, BuildFinishedDto>,
+        val builds: Map<String, ProjectBuild>,
         val runs: Map<String, RunFinishedDto>,
         val rules: List<ExclusionRuleDto>,
         val state: EngineUiState,

@@ -1,5 +1,6 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.NameColouring
 /** Finds places in a test's source: where its method name is, and where its body starts. */
 object TestLocator {
     private const val LOOKAHEAD_LINES = 15

@@ -1,5 +1,8 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.SortMode
+import com.nocrunch.rider.view.ViewMode
+import com.nocrunch.rider.engine.TestState
 import com.intellij.ui.CheckedTreeNode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -22,7 +25,7 @@ class TreeSyncJTreeTest {
         for (i in 0 until root.childCount) tree.expandPath(TreePath(arrayOf(root, root.getChildAt(i))))
     }
 
-    private fun t(project: String, type: String, method: String, state: String) = com.nocrunch.rider.engine.TestResultDto(
+    private fun t(project: String, type: String, method: String, state: TestState) = com.nocrunch.rider.engine.TestResultDto(
         key = "$project|$type|$method", project = project, type = type, method = method, uid = "$type.$method", variant = null,
         displayName = method, state = state, durationMs = 1.0, message = null, stackTrace = null, filePath = null, line = null,
     )
@@ -46,10 +49,10 @@ class TreeSyncJTreeTest {
         val catalog = "tests/Shop.Catalog.Tests/Shop.Catalog.Tests.csproj"
         val core = "tests/Shop.Core.Tests/Shop.Core.Tests.csproj"
         val all = TestTreeModel.buildAll(listOf(
-            t(catalog, "Shop.Catalog.Tests.InventoryTests", "New_inventory_is_empty", "failed"),
-            t(catalog, "Shop.Catalog.Tests.InventoryTests", "Add_increases_quantity", "passed"),
-            t(catalog, "Shop.Catalog.Tests.ProductTests", "Has_a_name", "passed"),
-            t(core, "Shop.Core.Tests.PriceCalculatorTests", "Total_multiplies", "passed"),
+            t(catalog, "Shop.Catalog.Tests.InventoryTests", "New_inventory_is_empty", TestState.FAILED),
+            t(catalog, "Shop.Catalog.Tests.InventoryTests", "Add_increases_quantity", TestState.PASSED),
+            t(catalog, "Shop.Catalog.Tests.ProductTests", "Has_a_name", TestState.PASSED),
+            t(core, "Shop.Core.Tests.PriceCalculatorTests", "Total_multiplies", TestState.PASSED),
         ), emptyMap(), emptyList())
         render(all, failuresOnly = false)
         firstLoad()

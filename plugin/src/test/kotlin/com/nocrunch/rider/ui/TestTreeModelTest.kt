@@ -1,6 +1,9 @@
 package com.nocrunch.rider.ui
 
-import com.nocrunch.rider.engine.BuildFinishedDto
+import com.nocrunch.rider.engine.TestState
+import com.nocrunch.rider.engine.RunKind
+import com.nocrunch.rider.ProjectBuild
+import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestResultDto
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -12,7 +15,7 @@ class TestTreeModelTest {
     private val unit = "tests/Unit/Unit.csproj"
     private val e2e = "tests/E2E/E2E.csproj"
 
-    private fun t(project: String, type: String?, method: String?, state: String, uid: String = "$type.$method") =
+    private fun t(project: String, type: String?, method: String?, state: TestState, uid: String = "$type.$method") =
         TestResultDto(
             key = if (type != null && method != null) "$project|$type|$method" else "$project|uid:$uid",
             project = project, type = type, method = method, uid = uid, variant = null,
@@ -20,10 +23,10 @@ class TestTreeModelTest {
         )
 
     private val tests = listOf(
-        t(unit, "A.Calc", "Adds", "passed"),
-        t(unit, "A.Calc", "Subtracts", "failed"),
-        t(unit, "A.Other", "Works", "passed"),
-        t(e2e, "B.Flow", "Checkout", "passed"),
+        t(unit, "A.Calc", "Adds", TestState.PASSED),
+        t(unit, "A.Calc", "Subtracts", TestState.FAILED),
+        t(unit, "A.Other", "Works", TestState.PASSED),
+        t(e2e, "B.Flow", "Checkout", TestState.PASSED),
     )
 
     @Test
@@ -76,9 +79,9 @@ class TestTreeModelTest {
 
     @Test
     fun failures_only_keeps_failures_while_they_are_stale_queued_or_running() {
-        val staleFail = t(unit, "A.Calc", "Subtracts", "stale").copy(lastOutcome = "failed")
-        val runningFail = t(unit, "A.Calc", "Divides", "running").copy(lastOutcome = "failed")
-        val stalePass = t(unit, "A.Calc", "Adds", "stale").copy(lastOutcome = "passed")
+        val staleFail = t(unit, "A.Calc", "Subtracts", TestState.STALE).copy(lastOutcome = TestState.FAILED)
+        val runningFail = t(unit, "A.Calc", "Divides", TestState.RUNNING).copy(lastOutcome = TestState.FAILED)
+        val stalePass = t(unit, "A.Calc", "Adds", TestState.STALE).copy(lastOutcome = TestState.PASSED)
         val tree = TestTreeModel.build(listOf(staleFail, runningFail, stalePass), emptyMap(), emptyList(), failuresOnly = true)
 
         assertEquals(listOf("Divides", "Subtracts"), tree.single().children.single().children.map { it.dto.method })
@@ -87,9 +90,9 @@ class TestTreeModelTest {
     @Test
     fun filtered_rows_count_only_the_tests_they_show() {
         val tree = TestTreeModel.build(listOf(
-            t(unit, "A.Calc", "Adds", "passed"),
-            t(unit, "A.Calc", "Divides", "failed"),
-            t(unit, "A.Calc", "Subtracts", "passed"),
+            t(unit, "A.Calc", "Adds", TestState.PASSED),
+            t(unit, "A.Calc", "Divides", TestState.FAILED),
+            t(unit, "A.Calc", "Subtracts", TestState.PASSED),
         ), emptyMap(), emptyList(), failuresOnly = true)
 
         val project = tree.single()
@@ -100,20 +103,20 @@ class TestTreeModelTest {
     @Test
     fun build_failed_project_has_status() {
         val builds = mapOf(
-            "src/Core/Core.csproj" to BuildFinishedDto("src/Core/Core.csproj", "failed", "error CS1002", null),
-            unit to BuildFinishedDto(unit, "blocked", "", "src/Core/Core.csproj"),
-            "src/Lib/Lib.csproj" to BuildFinishedDto("src/Lib/Lib.csproj", "succeeded", "", null),
+            "src/Core/Core.csproj" to ProjectBuild("src/Core/Core.csproj", BuildStatus.FAILED, "error CS1002", null),
+            unit to ProjectBuild(unit, BuildStatus.BLOCKED, "", "src/Core/Core.csproj"),
+            "src/Lib/Lib.csproj" to ProjectBuild("src/Lib/Lib.csproj", BuildStatus.SUCCEEDED, "", null),
         )
         val tree = TestTreeModel.build(tests, builds, emptyList(), failuresOnly = true)
 
-        assertEquals("failed", tree.single { it.path == "src/Core/Core.csproj" }.buildStatus)
-        assertEquals("blocked", tree.single { it.path == unit }.buildStatus)
+        assertEquals(BuildStatus.FAILED, tree.single { it.path == "src/Core/Core.csproj" }.buildStatus)
+        assertEquals(BuildStatus.BLOCKED, tree.single { it.path == unit }.buildStatus)
         assertFalse(tree.any { it.path == "src/Lib/Lib.csproj" }, "healthy non-test projects are not shown")
     }
 
     @Test
     fun uid_only_tests_grouped_under_unknown_class() {
-        val tree = TestTreeModel.build(listOf(t(unit, null, null, "passed", uid = "u-1")), emptyMap(),
+        val tree = TestTreeModel.build(listOf(t(unit, null, null, TestState.PASSED, uid = "u-1")), emptyMap(),
             listOf(ExclusionRuleDto(unit, uid = "u-1")), false)
         val cls = tree.single().children.single()
         assertEquals(TestTreeModel.UNKNOWN_CLASS, cls.type)
@@ -122,7 +125,7 @@ class TestTreeModelTest {
 
     @Test
     fun unknown_class_node_excludes_its_tests_by_uid_not_the_project() {
-        val tree = TestTreeModel.build(listOf(t(unit, null, null, "passed", uid = "u-1"), t(unit, null, null, "passed", uid = "u-2")),
+        val tree = TestTreeModel.build(listOf(t(unit, null, null, TestState.PASSED, uid = "u-1"), t(unit, null, null, TestState.PASSED, uid = "u-2")),
             emptyMap(), emptyList(), false)
         val rules = tree.single().children.single().rules
         assertEquals(listOf(ExclusionRuleDto(unit, uid = "u-1"), ExclusionRuleDto(unit, uid = "u-2")), rules)
@@ -152,9 +155,9 @@ class TestTreeModelTest {
     @Test
     fun pending_counts_queued_running_stale_and_discovered_but_not_excluded_or_skipped() {
         val mixed = listOf(
-            t(unit, "A.C", "Q", "queued"), t(unit, "A.C", "R", "running"), t(unit, "A.C", "S", "stale"),
-            t(unit, "A.C", "D", "discovered"), t(unit, "A.C", "K", "skipped"), t(unit, "A.C", "X", "excluded"),
-            t(unit, "A.C", "P", "passed"),
+            t(unit, "A.C", "Q", TestState.QUEUED), t(unit, "A.C", "R", TestState.RUNNING), t(unit, "A.C", "S", TestState.STALE),
+            t(unit, "A.C", "D", TestState.DISCOVERED), t(unit, "A.C", "K", TestState.SKIPPED), t(unit, "A.C", "X", TestState.EXCLUDED),
+            t(unit, "A.C", "P", TestState.PASSED),
         )
         val tree = TestTreeModel.build(mixed, emptyMap(), listOf(ExclusionRuleDto(unit, "A.C", "P")), false)
 
@@ -169,21 +172,21 @@ class TestTreeModelTest {
 
     @Test
     fun manual_results_are_flagged_and_excluded_ones_keep_their_outcome() {
-        val manualFail = t(e2e, "B.Flow", "Checkout", "failed").copy(runKind = "manual")
-        val auto = t(unit, "A.Calc", "Adds", "passed").copy(runKind = "auto")
+        val manualFail = t(e2e, "B.Flow", "Checkout", TestState.FAILED).copy(runKind = RunKind.MANUAL)
+        val auto = t(unit, "A.Calc", "Adds", TestState.PASSED).copy(runKind = RunKind.AUTO)
         val tree = TestTreeModel.build(listOf(manualFail, auto), emptyMap(), listOf(ExclusionRuleDto(e2e)), false)
 
         val manualNode = tree.single { it.path == e2e }.children.single().children.single()
         assertTrue(manualNode.manual)
         assertTrue(manualNode.excluded)
-        assertEquals("failed", manualNode.dto.state)
+        assertEquals(TestState.FAILED, manualNode.dto.state)
         assertFalse(tree.single { it.path == unit }.children.single().children.single().manual)
     }
 
     @Test
     fun manual_results_of_excluded_tests_count_at_every_level() {
-        val manualPass = t(e2e, "B.Flow", "Checkout", "passed").copy(runKind = "manual")
-        val notRun = t(e2e, "B.Flow", "Refund", "excluded")
+        val manualPass = t(e2e, "B.Flow", "Checkout", TestState.PASSED).copy(runKind = RunKind.MANUAL)
+        val notRun = t(e2e, "B.Flow", "Refund", TestState.EXCLUDED)
         val tree = TestTreeModel.build(listOf(manualPass, notRun), emptyMap(), listOf(ExclusionRuleDto(e2e)), false)
 
         val project = tree.single()
@@ -195,44 +198,44 @@ class TestTreeModelTest {
 
     @Test
     fun stale_tests_show_their_last_outcome_and_are_marked_not_fresh() {
-        val staleFail = t(unit, "A.Calc", "Adds", "stale").copy(lastOutcome = "failed")
-        val queuedPass = t(unit, "A.Calc", "Subtracts", "queued").copy(lastOutcome = "passed")
-        val neverRun = t(unit, "A.Other", "New", "queued")
-        val fresh = t(unit, "A.Other", "Works", "passed")
+        val staleFail = t(unit, "A.Calc", "Adds", TestState.STALE).copy(lastOutcome = TestState.FAILED)
+        val queuedPass = t(unit, "A.Calc", "Subtracts", TestState.QUEUED).copy(lastOutcome = TestState.PASSED)
+        val neverRun = t(unit, "A.Other", "New", TestState.QUEUED)
+        val fresh = t(unit, "A.Other", "Works", TestState.PASSED)
         val tree = TestTreeModel.build(listOf(staleFail, queuedPass, neverRun, fresh), emptyMap(), emptyList(), false)
         val calc = tree.single().children.single { it.type == "A.Calc" }
         val other = tree.single().children.single { it.type == "A.Other" }
         fun node(m: String) = tree.single().children.flatMap { it.children }.single { it.dto.method == m }
 
-        assertEquals("failed", node("Adds").shownOutcome)
-        assertEquals("stale", node("Adds").freshness)
-        assertEquals("passed", node("Subtracts").shownOutcome)
-        assertEquals("queued", node("Subtracts").freshness)
+        assertEquals(TestState.FAILED, node("Adds").shownOutcome)
+        assertEquals(TestState.STALE, node("Adds").freshness)
+        assertEquals(TestState.PASSED, node("Subtracts").shownOutcome)
+        assertEquals(TestState.QUEUED, node("Subtracts").freshness)
         assertEquals(null, node("New").shownOutcome)
         assertEquals(null, node("Works").freshness)
 
-        assertEquals("failed", calc.shownOutcome, "worst last outcome")
+        assertEquals(TestState.FAILED, calc.shownOutcome, "worst last outcome")
         assertFalse(calc.isFresh)
-        assertEquals("passed", other.shownOutcome)
+        assertEquals(TestState.PASSED, other.shownOutcome)
         assertFalse(other.isFresh)
-        assertEquals("failed", tree.single().shownOutcome)
+        assertEquals(TestState.FAILED, tree.single().shownOutcome)
     }
 
     @Test
     fun parent_rows_summarise_freshness_running_then_queued_then_stale() {
-        fun tree(vararg states: String) = TestTreeModel.build(
-            states.mapIndexed { i, st -> t(unit, "A.C", "M$i", st).copy(lastOutcome = "passed") }, emptyMap(), emptyList(), false).single()
+        fun tree(vararg states: TestState) = TestTreeModel.build(
+            states.mapIndexed { i, st -> t(unit, "A.C", "M$i", st).copy(lastOutcome = TestState.PASSED) }, emptyMap(), emptyList(), false).single()
 
-        assertEquals("stale", tree("stale", "passed").freshness)
-        assertEquals("stale", tree("stale", "passed").children.single().freshness)
-        assertEquals("queued", tree("stale", "queued").freshness)
-        assertEquals("running", tree("queued", "running", "stale").freshness)
-        assertEquals(null, tree("passed", "failed").freshness)
+        assertEquals(TestState.STALE, tree(TestState.STALE, TestState.PASSED).freshness)
+        assertEquals(TestState.STALE, tree(TestState.STALE, TestState.PASSED).children.single().freshness)
+        assertEquals(TestState.QUEUED, tree(TestState.STALE, TestState.QUEUED).freshness)
+        assertEquals(TestState.RUNNING, tree(TestState.QUEUED, TestState.RUNNING, TestState.STALE).freshness)
+        assertEquals(null, tree(TestState.PASSED, TestState.FAILED).freshness)
     }
 
     @Test
     fun excluded_tests_never_run_by_hand_do_not_make_parents_stale() {
-        val tree = TestTreeModel.build(listOf(t(e2e, "B.Flow", "Checkout", "excluded"), t(e2e, "B.Flow", "Other", "passed")),
+        val tree = TestTreeModel.build(listOf(t(e2e, "B.Flow", "Checkout", TestState.EXCLUDED), t(e2e, "B.Flow", "Other", TestState.PASSED)),
             emptyMap(), listOf(ExclusionRuleDto(e2e, "B.Flow", "Checkout")), false).single()
         assertEquals(null, tree.freshness)
     }
@@ -248,17 +251,11 @@ class TestTreeModelTest {
     }
 
     @Test
-    fun excluded_keys_lists_every_excluded_test() {
-        val rules = listOf(ExclusionRuleDto(e2e), ExclusionRuleDto(unit, "A.Calc", "Adds"))
-        assertEquals(setOf("$e2e|B.Flow|Checkout", "$unit|A.Calc|Adds"), TestTreeModel.excludedKeys(tests, rules).toSet())
-    }
-
-    @Test
     fun excluded_tests_not_run_this_session_show_stale_with_no_outcome() {
-        val tree = TestTreeModel.build(listOf(t(e2e, "B.Flow", "Checkout", "excluded"), t(e2e, "B.Flow", "Stored", "stale")),
+        val tree = TestTreeModel.build(listOf(t(e2e, "B.Flow", "Checkout", TestState.EXCLUDED), t(e2e, "B.Flow", "Stored", TestState.STALE)),
             emptyMap(), listOf(ExclusionRuleDto(e2e)), false)
         tree.single().children.single().children.forEach {
-            assertEquals("stale", it.freshness, it.dto.method)
+            assertEquals(TestState.STALE, it.freshness, it.dto.method)
             assertEquals(null, it.shownOutcome, it.dto.method)
         }
     }
@@ -266,11 +263,11 @@ class TestTreeModelTest {
     @Test
     fun run_times_add_up_at_class_and_project_level() {
         val timed = listOf(
-            t(unit, "A.Calc", "Adds", "passed").copy(durationMs = 120.0),
-            t(unit, "A.Calc", "Subtracts", "failed").copy(durationMs = 30.0),
-            t(unit, "A.Other", "Works", "stale").copy(durationMs = 850.0, lastOutcome = "passed"),
-            t(unit, "A.Other", "NeverRun", "queued").copy(durationMs = null),
-            t(unit, "A.Other", "Skipped", "excluded").copy(durationMs = 999.0),
+            t(unit, "A.Calc", "Adds", TestState.PASSED).copy(durationMs = 120.0),
+            t(unit, "A.Calc", "Subtracts", TestState.FAILED).copy(durationMs = 30.0),
+            t(unit, "A.Other", "Works", TestState.STALE).copy(durationMs = 850.0, lastOutcome = TestState.PASSED),
+            t(unit, "A.Other", "NeverRun", TestState.QUEUED).copy(durationMs = null),
+            t(unit, "A.Other", "Skipped", TestState.EXCLUDED).copy(durationMs = 999.0),
         )
         val tree = TestTreeModel.build(timed, emptyMap(), listOf(ExclusionRuleDto(unit, "A.Other", "Skipped")), false).single()
 
@@ -289,12 +286,31 @@ class TestTreeModelTest {
     }
 
     @Test
+    fun a_state_from_a_newer_engine_keeps_the_last_outcome_and_counts_nothing() {
+        val unknown = t(unit, "A.Calc", "Adds", TestState.UNKNOWN).copy(lastOutcome = TestState.PASSED)
+        val node = TestTreeModel.build(listOf(unknown), emptyMap(), emptyList(), false).single().children.single().children.single()
+
+        assertEquals(TestState.PASSED, node.shownOutcome)
+        assertEquals(TestState.UNKNOWN, node.freshness)
+        assertEquals(Counts(), node.counts)
+    }
+
+    @Test
+    fun a_build_in_progress_is_neither_broken_nor_shown_on_its_own() {
+        val tree = TestTreeModel.build(tests, mapOf("src/Lib/Lib.csproj" to ProjectBuild.started("src/Lib/Lib.csproj")), emptyList(), false)
+        assertFalse(tree.any { it.path == "src/Lib/Lib.csproj" })
+
+        val building = TestTreeModel.build(tests, mapOf(unit to ProjectBuild.started(unit)), emptyList(), false)
+        assertEquals(BuildStatus.BUILDING, building.single { it.path == unit }.buildStatus)
+    }
+
+    @Test
     fun a_stale_manual_result_of_an_excluded_test_stops_counting_for_its_parents() {
-        val stale = t(unit, "A.Other", "Always_passes", "stale").copy(runKind = "manual", lastOutcome = "failed")
-        val pass = t(unit, "A.Calc", "Adds", "passed")
+        val stale = t(unit, "A.Other", "Always_passes", TestState.STALE).copy(runKind = RunKind.MANUAL, lastOutcome = TestState.FAILED)
+        val pass = t(unit, "A.Calc", "Adds", TestState.PASSED)
         val tree = TestTreeModel.build(listOf(stale, pass), emptyMap(), listOf(ExclusionRuleDto(unit, "A.Other")), false)
         val project = tree.single()
-        assertEquals("passed", project.shownOutcome, "the excluded test's old failure doesn't turn the project red")
+        assertEquals(TestState.PASSED, project.shownOutcome, "the excluded test's old failure doesn't turn the project red")
         assertEquals(null, project.freshness)
         assertEquals(Counts(passed = 1), project.counts)
         assertEquals(0, project.manualCount)

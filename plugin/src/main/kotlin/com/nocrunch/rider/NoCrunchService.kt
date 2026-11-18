@@ -10,6 +10,7 @@ import com.intellij.openapi.project.Project
 import com.nocrunch.rider.engine.BuildFinishedDto
 import com.nocrunch.rider.engine.EngineClient
 import com.nocrunch.rider.engine.EngineProcess
+import com.nocrunch.rider.engine.EngineState
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.InitializeParams
 import com.nocrunch.rider.engine.InitializeResult
@@ -37,11 +38,10 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** state: starting, idle, syncing, building, testing, paused, stopped, error */
-data class EngineUiState(val state: String, val queued: Int = 0, val error: String? = null) {
+data class EngineUiState(val state: EngineState, val queued: Int = 0, val error: String? = null) {
     companion object {
         /** The service is created when the project opens or the tool window shows; the engine starts straight away. */
-        fun initial() = EngineUiState("starting")
+        fun initial() = EngineUiState(EngineState.STARTING)
     }
 }
 
@@ -52,14 +52,14 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
 
     private val _state = MutableStateFlow(EngineUiState.initial())
     private val _tests = MutableStateFlow<Map<String, TestResultDto>>(emptyMap())
-    private val _builds = MutableStateFlow<Map<String, BuildFinishedDto>>(emptyMap())
+    private val _builds = MutableStateFlow<Map<String, ProjectBuild>>(emptyMap())
     private val _runs = MutableStateFlow<Map<String, RunFinishedDto>>(emptyMap())
     private val _exclusions = MutableStateFlow<List<ExclusionRuleDto>>(emptyList())
 
     val state: StateFlow<EngineUiState> = _state.asStateFlow()
     val tests: StateFlow<Map<String, TestResultDto>> = _tests.asStateFlow()
-    /** Latest build per project; status "building" while in progress. */
-    val builds: StateFlow<Map<String, BuildFinishedDto>> = _builds.asStateFlow()
+    /** Latest build per project, including ones still in progress. */
+    val builds: StateFlow<Map<String, ProjectBuild>> = _builds.asStateFlow()
     val runs: StateFlow<Map<String, RunFinishedDto>> = _runs.asStateFlow()
     val exclusions: StateFlow<List<ExclusionRuleDto>> = _exclusions.asStateFlow()
 
@@ -82,17 +82,17 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     fun start() {
         if (!engine.canStart) return
         val solution = findSolution() ?: run {
-            _state.value = EngineUiState("error", error = "No .sln or .slnx found for this project.")
+            _state.value = EngineUiState(EngineState.ERROR, error = "No .sln or .slnx found for this project.")
             return
         }
         val engineDll = findEngineDll() ?: run {
-            _state.value = EngineUiState("error", error = "Engine not found at ${engineDllPath() ?: "(plugin path unknown)"}")
+            _state.value = EngineUiState(EngineState.ERROR, error = "Engine not found at ${engineDllPath() ?: "(plugin path unknown)"}")
             return
         }
         MirrorFolderExcluder.ensureIgnored()
         val store = ExclusionStore.forSolution(solution).also { exclusionStore = it }
         _exclusions.value = store.load()
-        _state.value = EngineUiState("starting")
+        _state.value = EngineUiState(EngineState.STARTING)
 
         val settings = NoCrunchSettings.getInstance(project)
         val dotnet = settings.resolveDotnet()
@@ -129,7 +129,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     private fun failStart(proc: EngineProcess, e: Exception) {
         // Under the start() lock, so a start() that follows straight after can't have its "starting" overwritten.
         val wasCurrent = synchronized(this) {
-            engine.retire(proc).also { if (it) _state.value = EngineUiState("error", error = e.message ?: e.toString()) }
+            engine.retire(proc).also { if (it) _state.value = EngineUiState(EngineState.ERROR, error = e.message ?: e.toString()) }
         }
         if (wasCurrent) log.warn("No Crunch engine failed to start", e)
         else log.info("Abandoned No Crunch engine start ended: $e")
@@ -149,7 +149,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     /** Runs everything: non-excluded tests as a normal run, excluded ones as a manual run. */
     fun runAllIncludingExcluded() {
         runAll()
-        val excluded = com.nocrunch.rider.ui.TestTreeModel.excludedKeys(_tests.value.values, _exclusions.value)
+        val excluded = com.nocrunch.rider.exclusions.TestExclusions.excludedKeys(_tests.value.values, _exclusions.value)
         if (excluded.isNotEmpty()) runTests(excluded)
     }
     fun runTests(keys: Collection<String>) = send("runTests", mapOf("keys" to keys.toList()))
@@ -190,9 +190,9 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
             }
             "projectBuildStarted" -> {
                 val project = params["project"].asString
-                _builds.update { it + (project to BuildFinishedDto(project, "building", "", null)) }
+                _builds.update { it + (project to ProjectBuild.started(project)) }
             }
-            "projectBuildFinished" -> gson.fromJson(params, BuildFinishedDto::class.java).let { b -> _builds.update { it + (b.project to b) } }
+            "projectBuildFinished" -> gson.fromJson(params, BuildFinishedDto::class.java).let { b -> _builds.update { it + (b.project to ProjectBuild.finished(b)) } }
             "testsDiscovered" -> gson.fromJson(params, TestsDiscoveredDto::class.java).let { d ->
                 // A discovery list is authoritative for its project: tests that no longer exist disappear.
                 _tests.update { current -> current.filterValues { it.project != d.project } + d.tests.associateBy { it.key } }
@@ -213,7 +213,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
             crashTimes.size
         }
         if (recent > 3) {
-            _state.value = EngineUiState("error", error = "Engine keeps exiting (code $code). See idea.log.")
+            _state.value = EngineUiState(EngineState.ERROR, error = "Engine keeps exiting (code $code). See idea.log.")
             return
         }
         log.warn("No Crunch engine exited with code $code; restarting")
@@ -222,7 +222,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
 
     private fun stopEngine() {
         engine.clear()?.stop()
-        _state.value = EngineUiState("stopped")
+        _state.value = EngineUiState(EngineState.STOPPED)
     }
 
     private fun findSolution(): Path? {

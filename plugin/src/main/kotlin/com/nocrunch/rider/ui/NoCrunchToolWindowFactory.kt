@@ -14,7 +14,7 @@ class NoCrunchToolWindowFactory : ToolWindowFactory, DumbAware {
     override suspend fun manage(toolWindow: ToolWindow, toolWindowManager: com.intellij.openapi.wm.ToolWindowManager) {
         // The shared model is built off the EDT; only picking the icon happens here.
         NoCrunchResults.getInstance(toolWindow.project).snapshots
-            .map { CupcakeIcon.variantFor(it.bar.colour, paused = it.state.state == "paused") }
+            .map { CupcakeIcon.variantFor(it.bar.colour, paused = it.state.state == com.nocrunch.rider.engine.EngineState.PAUSED) }
             .distinctUntilChanged()
             .collect { variant ->
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.EDT) { toolWindow.setIcon(variant.icon) }

@@ -1,5 +1,7 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.view.ViewMode
+import com.nocrunch.rider.engine.TestState
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestResultDto
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -9,18 +11,18 @@ import org.junit.jupiter.api.Test
 class TreeViewTest {
     private val unit = "tests/Unit/Unit.csproj"
 
-    private fun t(type: String, method: String, state: String, file: String?, ms: Double = 10.0) = TestResultDto(
+    private fun t(type: String, method: String, state: TestState, file: String?, ms: Double = 10.0) = TestResultDto(
         key = "$unit|$type|$method", project = unit, type = type, method = method, uid = "$type.$method", variant = null,
         displayName = method, state = state, durationMs = ms, message = null, stackTrace = null,
         filePath = file, line = 1,
     )
 
     private val tests = listOf(
-        t("Shop.Unit.Pricing.CalcTests", "Adds", "passed", "/repo/tests/Unit/Pricing/CalcTests.cs"),
-        t("Shop.Unit.Pricing.CalcTests", "Subtracts", "failed", "/repo/tests/Unit/Pricing/CalcTests.cs"),
-        t("Shop.Unit.Pricing.TaxTests", "Vat", "passed", "/repo/tests/Unit/Pricing/TaxTests.cs"),
-        t("Shop.Unit.OtherTests", "Works", "passed", "/repo/tests/Unit/OtherTests.cs"),
-        t("Shop.Unit.OtherTests", "NoLocation", "passed", null),
+        t("Shop.Unit.Pricing.CalcTests", "Adds", TestState.PASSED, "/repo/tests/Unit/Pricing/CalcTests.cs"),
+        t("Shop.Unit.Pricing.CalcTests", "Subtracts", TestState.FAILED, "/repo/tests/Unit/Pricing/CalcTests.cs"),
+        t("Shop.Unit.Pricing.TaxTests", "Vat", TestState.PASSED, "/repo/tests/Unit/Pricing/TaxTests.cs"),
+        t("Shop.Unit.OtherTests", "Works", TestState.PASSED, "/repo/tests/Unit/OtherTests.cs"),
+        t("Shop.Unit.OtherTests", "NoLocation", TestState.PASSED, null),
     )
 
     private fun project() = TestTreeModel.build(tests, emptyMap(), emptyList(), false).single()

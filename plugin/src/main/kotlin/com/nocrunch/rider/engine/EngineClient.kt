@@ -1,7 +1,6 @@
 package com.nocrunch.rider.engine
 
 import com.google.gson.Gson
-import com.google.gson.GsonBuilder
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -32,7 +31,7 @@ class EngineClient(
     private val requestTimeout: Duration = Duration.ofSeconds(60),
 ) : AutoCloseable {
     private val log = logger<EngineClient>()
-    val gson: Gson = GsonBuilder().serializeNulls().create()
+    val gson: Gson = EngineJson.gson
 
     private val input = BufferedInputStream(input)
     private val nextId = AtomicInteger(1)

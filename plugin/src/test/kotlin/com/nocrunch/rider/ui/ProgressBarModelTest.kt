@@ -1,11 +1,12 @@
 package com.nocrunch.rider.ui
 
 import com.nocrunch.rider.EngineUiState
+import com.nocrunch.rider.engine.EngineState
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 class ProgressBarModelTest {
-    private fun bar(passed: Int, failed: Int, pending: Int, state: String = "idle", queued: Int = 0, brokenBuilds: Int = 0, error: String? = null) =
+    private fun bar(passed: Int, failed: Int, pending: Int, state: EngineState = EngineState.IDLE, queued: Int = 0, brokenBuilds: Int = 0, error: String? = null) =
         ProgressBarModel.from(Counts(passed, failed, pending), EngineUiState(state, queued, error), brokenBuilds)
 
     @Test
@@ -18,7 +19,7 @@ class ProgressBarModelTest {
 
     @Test
     fun any_failure_is_red_even_while_running() {
-        val b = bar(3, 1, 4, state = "testing", queued = 2)
+        val b = bar(3, 1, 4, state = EngineState.TESTING, queued = 2)
         assertEquals(BarColour.FAILING, b.colour)
         assertEquals(0.5, b.fraction, 1e-9)
         assertEquals("Running tests in 2 projects…   ✔ 3  ✖ 1  ○ 4", b.text)
@@ -26,8 +27,8 @@ class ProgressBarModelTest {
 
     @Test
     fun in_progress_without_failures_is_blue() {
-        assertEquals(BarColour.RUNNING, bar(3, 0, 1, state = "testing", queued = 1).colour)
-        assertEquals(BarColour.RUNNING, bar(4, 0, 0, state = "building", queued = 2).colour)
+        assertEquals(BarColour.RUNNING, bar(3, 0, 1, state = EngineState.TESTING, queued = 1).colour)
+        assertEquals(BarColour.RUNNING, bar(4, 0, 0, state = EngineState.BUILDING, queued = 2).colour)
     }
 
     @Test
@@ -46,14 +47,14 @@ class ProgressBarModelTest {
 
     @Test
     fun error_is_red() {
-        val b = bar(0, 0, 0, state = "error", error = "dotnet not found")
+        val b = bar(0, 0, 0, state = EngineState.ERROR, error = "dotnet not found")
         assertEquals(BarColour.FAILING, b.colour)
         assertEquals("Error: dotnet not found   ✔ 0  ✖ 0  ○ 0", b.text)
     }
 
     @Test
     fun nothing_yet_is_neutral_and_empty() {
-        val b = bar(0, 0, 0, state = "starting")
+        val b = bar(0, 0, 0, state = EngineState.STARTING)
         assertEquals(BarColour.NEUTRAL, b.colour)
         assertEquals(0.0, b.fraction, 1e-9)
     }
