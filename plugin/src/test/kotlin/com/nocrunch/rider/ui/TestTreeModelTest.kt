@@ -75,6 +75,16 @@ class TestTreeModelTest {
     }
 
     @Test
+    fun failures_only_keeps_failures_while_they_are_stale_queued_or_running() {
+        val staleFail = t(unit, "A.Calc", "Subtracts", "stale").copy(lastOutcome = "failed")
+        val runningFail = t(unit, "A.Calc", "Divides", "running").copy(lastOutcome = "failed")
+        val stalePass = t(unit, "A.Calc", "Adds", "stale").copy(lastOutcome = "passed")
+        val tree = TestTreeModel.build(listOf(staleFail, runningFail, stalePass), emptyMap(), emptyList(), failuresOnly = true)
+
+        assertEquals(listOf("Divides", "Subtracts"), tree.single().children.single().children.map { it.dto.method })
+    }
+
+    @Test
     fun build_failed_project_has_status() {
         val builds = mapOf(
             "src/Core/Core.csproj" to BuildFinishedDto("src/Core/Core.csproj", "failed", "error CS1002", null),

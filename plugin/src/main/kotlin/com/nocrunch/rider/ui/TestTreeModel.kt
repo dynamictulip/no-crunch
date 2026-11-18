@@ -183,7 +183,9 @@ object TestTreeModel {
                             if (n.rows.isEmpty()) n
                             else n.copy(rows = alignRows(n.rows.map { r -> r.copy(argNames = paramNames(r.dto)) }.sortedWith(compareBy(NaturalOrder) { it.label })))
                         }
-                        .filter { !failuresOnly || it.dto.state == "failed" }
+                        // Same outcome the tree shows, so failures stay listed (muted) while stale, queued or
+                        // running, and a theory stays while any of its rows fails.
+                        .filter { !failuresOnly || it.shownOutcome == "failed" || it.rows.any { r -> r.shownOutcome == "failed" } }
                         .filter { !hideExcluded || !it.excluded }
                     ClassNode(path, type, classExcluded, nodes, parentExcluded = projectExcluded)
                 }

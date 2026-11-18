@@ -42,6 +42,17 @@ class TheoryRowsTest {
     }
 
     @Test
+    fun failures_only_keeps_a_theory_whose_rows_are_failing() {
+        val reporting = listOf(
+            t(null, "running").copy(lastOutcome = null),
+            t("N.C.Enrich_Line(scenario: \"no date\")", "passed", theory = theoryKey),
+            t("N.C.Enrich_Line(scenario: \"day zero\")", "failed", theory = theoryKey),
+        )
+        val cls = TestTreeModel.build(reporting, emptyMap(), emptyList(), failuresOnly = true).single().children.single()
+        assertEquals(listOf(theoryKey), cls.children.map { it.dto.key })
+    }
+
+    @Test
     fun rows_listed_as_separate_tests_nest_under_their_method() {
         val listed = listOf(
             t("N.C.Other(x: 1)", "passed", uid = "u2", m = "Other(System.Int32)"),
