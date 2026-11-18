@@ -181,17 +181,146 @@ public class SharedMirrorWorkspaceTests
     }
 
     [TestMethod]
-    public async Task Gitignore_change_removes_newly_ignored_directories_from_mirror()
+    public async Task Gitignore_change_leaves_newly_ignored_directories_in_mirror()
     {
+        // The mirror can't tell sources copied before the directory was ignored from build output written there
+        // since (artifacts/ with UseArtifactsOutput), so an ignored directory's mirror copy is never touched.
         var (root, layout, ws) = SetupRealGitRepo("");
         await ws.InitializeAsync(CancellationToken.None);
         Assert.IsTrue(Directory.Exists(Path.Combine(layout.MirrorRoot, "artifacts")));
 
         Write(root, ".gitignore", "artifacts/\n");
-        await ws.SyncAsync([Path.Combine(root, ".gitignore")], CancellationToken.None);
+        var changed = await ws.SyncAsync([Path.Combine(root, ".gitignore")], CancellationToken.None);
 
-        Assert.IsFalse(Directory.Exists(Path.Combine(layout.MirrorRoot, "artifacts")));
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "artifacts/My Pkg/out.nupkg")));
+        CollectionAssert.AreEqual(new[] { ".gitignore" }, changed.ToArray());
     }
+
+    [TestMethod]
+    public async Task Reconcile_leaves_build_output_in_gitignored_directories_alone()
+    {
+        var (_, layout, ws) = SetupRealGitRepo("artifacts/\n");
+        await ws.InitializeAsync(CancellationToken.None);
+        WriteMirror(layout, "artifacts/bin/App/debug/App.dll", "built in the mirror");
+
+        var changed = await ws.ReconcileAsync(CancellationToken.None);
+
+        Assert.AreEqual(0, changed.Count, string.Join(", ", changed));
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "artifacts/bin/App/debug/App.dll")));
+    }
+
+    [TestMethod]
+    public async Task Reconcile_leaves_gitignored_directories_that_only_the_mirror_has_alone()
+    {
+        // The user never built outside No Crunch, so the repo has no artifacts/ at all; the mirror's is still output.
+        var (root, layout, ws) = SetupRealGitRepo("artifacts/\n**/generated/\n");
+        Directory.Delete(Path.Combine(root, "artifacts"), recursive: true);
+        await ws.InitializeAsync(CancellationToken.None);
+        WriteMirror(layout, "artifacts/bin/App/debug/App.dll", "built in the mirror");
+        WriteMirror(layout, "src/App/generated/Gen.cs", "generated in the mirror");
+
+        var changed = await ws.ReconcileAsync(CancellationToken.None);
+
+        Assert.AreEqual(0, changed.Count, string.Join(", ", changed));
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "artifacts/bin/App/debug/App.dll")));
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/App/generated/Gen.cs")));
+    }
+
+    [TestMethod]
+    public async Task Reconcile_removes_directories_deleted_from_the_repo()
+    {
+        var (root, layout, ws) = SetupRealGitRepo("artifacts/\n");
+        await ws.InitializeAsync(CancellationToken.None);
+        Directory.Delete(Path.Combine(root, "plugin"), recursive: true);
+
+        var changed = await ws.ReconcileAsync(CancellationToken.None);
+
+        CollectionAssert.AreEqual(new[] { "plugin/.gradle/caches/huge.bin" }, changed.ToArray());
+        Assert.IsFalse(Directory.Exists(Path.Combine(layout.MirrorRoot, "plugin")));
+    }
+
+    [TestMethod]
+    public async Task Sync_of_a_deleted_gitignored_directory_leaves_the_mirror_copy_alone()
+    {
+        var (root, layout, ws) = SetupRealGitRepo("artifacts/\n");
+        await ws.InitializeAsync(CancellationToken.None);
+        WriteMirror(layout, "artifacts/bin/App.dll", "built in the mirror");
+        Directory.Delete(Path.Combine(root, "artifacts"), recursive: true);
+        await ws.ReconcileAsync(CancellationToken.None); // forget the ignored list that still had artifacts/
+
+        var changed = await ws.SyncAsync([Path.Combine(root, "artifacts")], CancellationToken.None);
+
+        Assert.AreEqual(0, changed.Count, string.Join(", ", changed));
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "artifacts/bin/App.dll")));
+    }
+
+    [TestMethod]
+    public async Task Reconcile_treats_a_file_that_vanishes_before_it_is_copied_as_deleted()
+    {
+        // A dangling symlink is listed like a file but can't be opened, which is exactly what a file deleted or
+        // renamed between the directory listing and the copy looks like (e.g. Rider's safe-write temp files).
+        var (root, layout, ws) = Setup();
+        await ws.InitializeAsync(CancellationToken.None);
+        WriteMirror(layout, "src/App/Gone.cs", "copied earlier");
+        File.CreateSymbolicLink(Path.Combine(root, "src/App/Gone.cs"), Path.Combine(root, "src/App/nowhere.cs"));
+
+        var changed = await ws.ReconcileAsync(CancellationToken.None);
+
+        CollectionAssert.AreEqual(new[] { "src/App/Gone.cs" }, changed.ToArray());
+        Assert.IsFalse(File.Exists(Path.Combine(layout.MirrorRoot, "src/App/Gone.cs")));
+    }
+
+    [TestMethod]
+    public async Task Reconcile_reports_files_it_cannot_read()
+    {
+        if (OperatingSystem.IsWindows()) Assert.Inconclusive("Unix file modes");
+        var (root, _, ws) = Setup();
+        await ws.InitializeAsync(CancellationToken.None);
+        var secret = Path.Combine(root, "src/App/Secret.cs");
+        File.WriteAllText(secret, "class S {}");
+        File.SetUnixFileMode(secret, UnixFileMode.None);
+        try
+        {
+            await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(() => ws.ReconcileAsync(CancellationToken.None));
+        }
+        finally
+        {
+            File.SetUnixFileMode(secret, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [TestMethod]
+    public async Task Reconcile_skips_symlinked_directories_that_loop()
+    {
+        var (root, layout, ws) = Setup();
+        Directory.CreateSymbolicLink(Path.Combine(root, "src/Root"), root);
+        Directory.CreateSymbolicLink(Path.Combine(root, "src/App/Parent"), Path.Combine(root, "src"));
+
+        await ws.InitializeAsync(CancellationToken.None);
+
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/App/Program.cs")));
+        Assert.IsFalse(Directory.Exists(Path.Combine(layout.MirrorRoot, "src/Root")));
+        Assert.IsFalse(Directory.Exists(Path.Combine(layout.MirrorRoot, "src/App/Parent")));
+    }
+
+    [TestMethod]
+    public async Task Reconcile_copies_symlinked_directories_that_dont_loop_as_real_directories()
+    {
+        var (root, layout, ws) = Setup();
+        var shared = TempDir.Create();
+        Write(shared, "Shared.cs", "class Shared {}");
+        Directory.CreateSymbolicLink(Path.Combine(root, "src/Shared"), shared);
+        Directory.CreateSymbolicLink(Path.Combine(root, "src/AppAgain"), Path.Combine(root, "src/App"));
+
+        await ws.InitializeAsync(CancellationToken.None);
+
+        var mirrored = new DirectoryInfo(Path.Combine(layout.MirrorRoot, "src/Shared"));
+        Assert.IsNull(mirrored.LinkTarget, "a link would let mirror builds write outside the mirror");
+        Assert.AreEqual("class Shared {}", File.ReadAllText(Path.Combine(layout.MirrorRoot, "src/Shared/Shared.cs")));
+        Assert.IsTrue(File.Exists(Path.Combine(layout.MirrorRoot, "src/AppAgain/Program.cs")));
+    }
+
+    private static void WriteMirror(RepoLayout layout, string rel, string content) => Write(layout.MirrorRoot, rel, content);
 
     [TestMethod]
     public async Task Tracks_only_files_that_would_be_mirrored()
