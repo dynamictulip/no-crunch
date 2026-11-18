@@ -3,6 +3,21 @@ package com.nocrunch.rider.ui
 import com.nocrunch.rider.EngineUiState
 
 /** Human-readable wording for the engine state, used by the tool window and status bar. */
+/** The view filter that leaves the tree empty although there are tests. */
+enum class HiddenBy {
+    FAILURES_ONLY, EXCLUDED;
+
+    companion object {
+        /** Show Failures Only is named first: with both filters on, "no failing tests" is the more useful thing to say. */
+        fun of(hasTests: Boolean, shownEmpty: Boolean, failuresOnly: Boolean, hideExcluded: Boolean): HiddenBy? = when {
+            !hasTests || !shownEmpty -> null
+            failuresOnly -> FAILURES_ONLY
+            hideExcluded -> EXCLUDED
+            else -> null
+        }
+    }
+}
+
 object StatusText {
     fun describe(s: EngineUiState): String = when (s.state) {
         "starting" -> "Starting No Crunch…"
@@ -16,11 +31,13 @@ object StatusText {
         else -> s.state.replaceFirstChar { it.uppercase() }
     }
 
-    /** Shown in the tree while it has no tests yet. */
-    fun emptyTree(s: EngineUiState): String = when (s.state) {
-        "building", "syncing", "testing" -> describe(s) + " tests appear once they're built"
-        "idle" -> "No tests found"
-        "error" -> "No Crunch error: ${s.error ?: "unknown"}"
+    /** Shown in the tree while it has nothing to show: no tests yet, or a view filter is hiding them all. */
+    fun emptyTree(s: EngineUiState, hiddenBy: HiddenBy? = null): String = when {
+        s.state == "error" -> "No Crunch error: ${s.error ?: "unknown"}"
+        hiddenBy == HiddenBy.FAILURES_ONLY -> "No failing tests"
+        hiddenBy == HiddenBy.EXCLUDED -> "All tests are excluded"
+        s.state in setOf("building", "syncing", "testing") -> describe(s) + " tests appear once they're built"
+        s.state == "idle" -> "No tests found"
         else -> describe(s)
     }
 

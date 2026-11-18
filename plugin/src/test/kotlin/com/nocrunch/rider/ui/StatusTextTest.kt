@@ -29,6 +29,23 @@ class StatusTextTest {
     }
 
     @Test
+    fun empty_tree_says_when_a_view_filter_is_hiding_every_test() {
+        assertEquals("No failing tests", StatusText.emptyTree(EngineUiState("idle"), HiddenBy.FAILURES_ONLY))
+        assertEquals("No failing tests", StatusText.emptyTree(EngineUiState("testing", 2), HiddenBy.FAILURES_ONLY))
+        assertEquals("All tests are excluded", StatusText.emptyTree(EngineUiState("idle"), HiddenBy.EXCLUDED))
+        assertEquals("No Crunch error: boom", StatusText.emptyTree(EngineUiState("error", error = "boom"), HiddenBy.FAILURES_ONLY),
+            "an engine error matters more than the filter")
+    }
+
+    @Test
+    fun hidden_by_names_the_filter_only_when_it_hides_every_test() {
+        assertEquals(HiddenBy.FAILURES_ONLY, HiddenBy.of(hasTests = true, shownEmpty = true, failuresOnly = true, hideExcluded = true))
+        assertEquals(HiddenBy.EXCLUDED, HiddenBy.of(hasTests = true, shownEmpty = true, failuresOnly = false, hideExcluded = true))
+        assertEquals(null, HiddenBy.of(hasTests = false, shownEmpty = true, failuresOnly = true, hideExcluded = false), "no tests at all")
+        assertEquals(null, HiddenBy.of(hasTests = true, shownEmpty = false, failuresOnly = true, hideExcluded = false), "something shows")
+    }
+
+    @Test
     fun service_state_starts_as_starting() {
         assertEquals("starting", EngineUiState.initial().state)
     }

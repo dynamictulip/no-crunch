@@ -252,6 +252,14 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private var last: ResultsSnapshot? = null
 
+    /** The empty tree's "Show all tests" link: both view filters off. */
+    private fun showAllTests() {
+        failuresOnly = false
+        settings.state.hideExcluded = false
+        lastModel = null
+        last?.let(::render)
+    }
+
     private fun render(s: ResultsSnapshot) {
         last = s
         // The shared model has every test (the bar counts them all); the tree shows it through the view filters.
@@ -261,7 +269,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         val paused = s.state.state == "paused"
         if (paused) waitingLabel.text = StatusText.waiting(s.state.queued)
         (cards.layout as java.awt.CardLayout).show(cards, if (paused) PAUSED_CARD else RESULTS_CARD)
-        tree.emptyText.text = StatusText.emptyTree(s.state)
+        val hiddenBy = HiddenBy.of(hasTests = s.projects.any { it.hasTests }, shownEmpty = model.isEmpty(), failuresOnly, settings.state.hideExcluded)
+        tree.emptyText.text = StatusText.emptyTree(s.state, hiddenBy)
+        if (hiddenBy != null) tree.emptyText.appendSecondaryText("Show all tests", SimpleTextAttributes.LINK_ATTRIBUTES) { showAllTests() }
         if (model == lastModel) return
         lastModel = model
         val failuresBefore = anyFailures
