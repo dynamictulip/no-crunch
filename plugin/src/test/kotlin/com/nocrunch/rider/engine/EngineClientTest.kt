@@ -7,11 +7,14 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.time.Duration
 
 class EngineClientTest {
     private fun frame(json: String): ByteArray {
@@ -111,5 +114,87 @@ class EngineClientTest {
         pipe.toClient.close()
 
         assertThrows<ExecutionException> { future.get(5, TimeUnit.SECONDS) }
+    }
+
+    private fun sentId(pipe: Pipe): Int =
+        JsonParser.parseString(pipe.clientOut.toString(Charsets.UTF_8).substringAfter("\r\n\r\n")).asJsonObject["id"].asInt
+
+    @Test
+    fun skips_malformed_messages_and_keeps_reading() {
+        val pipe = Pipe()
+        val client = EngineClient(pipe.clientIn, pipe.clientOut)
+        val seen = LinkedBlockingQueue<String>()
+        client.onNotification { method, _ -> seen.add(method) }
+
+        pipe.toClient.write(frame("not json {"))
+        pipe.toClient.write(frame("[1,2,3]"))
+        pipe.toClient.write(frame("""{"jsonrpc":"2.0","method":{},"params":{}}"""))
+        pipe.toClient.write(frame("""{"jsonrpc":"2.0","id":"x","result":{}}"""))
+        pipe.toClient.write(frame("""{"jsonrpc":"2.0","method":"stateChanged","params":{"state":"idle"}}"""))
+        pipe.toClient.flush()
+
+        assertEquals("stateChanged", seen.poll(5, TimeUnit.SECONDS))
+        client.close()
+    }
+
+    @Test
+    fun result_that_does_not_deserialize_fails_the_request() {
+        val pipe = Pipe()
+        val client = EngineClient(pipe.clientIn, pipe.clientOut)
+        val seen = LinkedBlockingQueue<String>()
+        client.onNotification { method, _ -> seen.add(method) }
+        val future = client.request("initialize", null, InitializeResult::class.java)
+        val id = sentId(pipe)
+
+        pipe.toClient.write(frame("""{"jsonrpc":"2.0","id":$id,"result":{"protocolVersion":"not a number"}}"""))
+        pipe.toClient.write(frame("""{"jsonrpc":"2.0","method":"stateChanged","params":{}}"""))
+        pipe.toClient.flush()
+
+        assertThrows<ExecutionException> { future.get(5, TimeUnit.SECONDS) }
+        assertEquals("stateChanged", seen.poll(5, TimeUnit.SECONDS))
+        client.close()
+    }
+
+    @Test
+    fun bad_content_length_closes_the_connection() {
+        val pipe = Pipe()
+        var outputClosed = false
+        val out = object : OutputStream() {
+            override fun write(b: Int) = pipe.clientOut.write(b)
+            override fun write(b: ByteArray, off: Int, len: Int) = pipe.clientOut.write(b, off, len)
+            override fun close() { outputClosed = true }
+        }
+        val client = EngineClient(pipe.clientIn, out)
+        val future = client.request("runAll", null, JsonObject::class.java)
+
+        pipe.toClient.write("Content-Length: lots\r\n\r\n{}".toByteArray(Charsets.US_ASCII))
+        pipe.toClient.flush()
+
+        assertThrows<ExecutionException> { future.get(5, TimeUnit.SECONDS) }
+        // Closing the engine's stdin is what makes it exit, so the plugin's engine-exit handling takes over.
+        assertTrue(outputClosed)
+    }
+
+    @Test
+    fun negative_content_length_closes_the_connection() {
+        val pipe = Pipe()
+        val client = EngineClient(pipe.clientIn, pipe.clientOut)
+        val future = client.request("runAll", null, JsonObject::class.java)
+
+        pipe.toClient.write("Content-Length: -5\r\n\r\n".toByteArray(Charsets.US_ASCII))
+        pipe.toClient.flush()
+
+        assertThrows<ExecutionException> { future.get(5, TimeUnit.SECONDS) }
+    }
+
+    @Test
+    fun unanswered_request_times_out() {
+        val pipe = Pipe()
+        val client = EngineClient(pipe.clientIn, pipe.clientOut, requestTimeout = Duration.ofMillis(100))
+        val future = client.request("initialize", null, InitializeResult::class.java)
+
+        val e = assertThrows<ExecutionException> { future.get(5, TimeUnit.SECONDS) }
+        assertTrue(e.cause is TimeoutException)
+        client.close()
     }
 }
