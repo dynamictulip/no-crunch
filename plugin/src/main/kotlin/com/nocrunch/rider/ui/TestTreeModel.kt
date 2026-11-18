@@ -75,6 +75,9 @@ data class TestNode(
      */
     val countsForParents: Boolean = !excluded || (manual && freshness != TestState.STALE)
 
+    /** It shows a failure (current, or the last one while stale/queued/running) that counts towards its parents. */
+    val countedFailure: Boolean get() = countsForParents && shownOutcome == TestState.FAILED
+
     /** Run time that counts towards parents: excluded tests only count once run by hand. */
     val countedDurationMs: Double? = if (countsForParents) dto.durationMs else null
 
@@ -194,7 +197,9 @@ object TestTreeModel {
                     val kept = c.children
                         // Same outcome the tree shows, so failures stay listed (muted) while stale, queued or
                         // running, and a theory stays while any of its rows fails.
-                        .filter { !failuresOnly || it.shownOutcome == TestState.FAILED || it.rows.any { r -> r.shownOutcome == TestState.FAILED } }
+                        // Only failures that count, as the bar counts them: an excluded test's failure from before it
+                        // was excluded is still shown on its row, but isn't a failure to list here.
+                        .filter { !failuresOnly || it.countedFailure || it.rows.any { r -> r.countedFailure } }
                         .filter { !hideExcluded || !it.excluded }
                     if (kept.size == c.children.size) c else c.copy(children = kept)
                 }

@@ -88,6 +88,18 @@ class TestTreeModelTest {
     }
 
     @Test
+    fun failures_only_shows_the_failures_the_bar_counts() {
+        // Failed, then its class was excluded: it keeps "failed" as its last outcome, but no longer counts.
+        val excludedOldFail = t(unit, "A.Slow", "Rebuilds", TestState.EXCLUDED).copy(lastOutcome = TestState.FAILED)
+        // Excluded but run by hand just now: that failure counts.
+        val manualFail = t(unit, "A.Manual", "Imports", TestState.FAILED).copy(runKind = RunKind.MANUAL)
+        val rules = listOf(ExclusionRuleDto(unit, "A.Slow"), ExclusionRuleDto(unit, "A.Manual"))
+        val tree = TestTreeModel.build(listOf(excludedOldFail, manualFail), emptyMap(), rules, failuresOnly = true)
+
+        assertEquals(listOf("Imports"), tree.single().children.flatMap { c -> c.children.map { it.dto.method } })
+    }
+
+    @Test
     fun filtered_rows_count_only_the_tests_they_show() {
         val tree = TestTreeModel.build(listOf(
             t(unit, "A.Calc", "Adds", TestState.PASSED),
