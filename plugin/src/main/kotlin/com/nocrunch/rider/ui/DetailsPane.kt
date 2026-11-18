@@ -21,27 +21,25 @@ class DetailsPane(private val project: Project, parent: Disposable) {
     val component: JComponent get() = console.component
 
     /** What's showing, so redrawing the same text (a result batch that didn't touch this row) is skipped. */
-    private var shown: List<Pair<String, ConsoleViewContentType>>? = null
+    private var shown: List<DetailPart>? = null
 
     /**
-     * Shows text built with [Text]: normal, with only the failure words in red and side notes in grey. Leaves the
+     * Shows [parts] (see [DetailsText]): normal, with only the failure words in red and side notes in grey. Leaves the
      * console alone if the text is what it already shows, so its scroll position survives updates to other rows.
+     * Null clears it.
      */
-    fun show(build: Text.() -> Unit) {
-        val parts = Text().apply(build).parts.toList()
+    fun show(parts: List<DetailPart>?) {
+        if (parts == null) return clear()
         if (parts == shown) return
         shown = parts
         console.clear()
-        parts.forEach { (text, type) -> console.print(text, type) }
+        parts.forEach { console.print(it.text, type(it.style)) }
     }
 
-    class Text {
-        internal val parts = mutableListOf<Pair<String, ConsoleViewContentType>>()
-        fun normal(s: String) = apply { parts += s to ConsoleViewContentType.NORMAL_OUTPUT }
-        fun red(s: String) = apply { parts += s to ConsoleViewContentType.ERROR_OUTPUT }
-        fun muted(s: String) = apply { parts += s to MUTED }
-        /** [s] in red if [failed], otherwise normal. */
-        fun status(s: String, failed: Boolean) = if (failed) red(s) else normal(s)
+    private fun type(style: DetailStyle): ConsoleViewContentType = when (style) {
+        DetailStyle.NORMAL -> ConsoleViewContentType.NORMAL_OUTPUT
+        DetailStyle.RED -> ConsoleViewContentType.ERROR_OUTPUT
+        DetailStyle.MUTED -> MUTED
     }
 
     private companion object {
