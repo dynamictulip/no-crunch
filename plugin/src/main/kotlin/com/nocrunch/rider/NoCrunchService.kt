@@ -105,7 +105,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
                 c.onNotification(::onNotification)
                 client = c
                 val s = settings.state
-                val result = c.request("initialize", InitializeParams(solution.toString(), dotnet, s.maxParallel, s.debounceMs),
+                val result = c.request("initialize", InitializeParams(solution.toString(), dotnet, s.maxParallel, s.debounceMs, s.testTimeoutSeconds),
                     InitializeResult::class.java).get()
                 if (result.protocolVersion != PROTOCOL_VERSION) error("Engine protocol ${result.protocolVersion}, plugin expects $PROTOCOL_VERSION")
                 repoRoot = result.repoRoot

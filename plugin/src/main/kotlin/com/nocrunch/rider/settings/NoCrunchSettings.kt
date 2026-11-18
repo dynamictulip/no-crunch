@@ -13,6 +13,8 @@ class NoCrunchSettingsState : BaseState() {
     var debounceMs by property(300)
     /** 0 = half the CPU cores. */
     var maxParallel by property(0)
+    /** Stop a test run that reports no result for this many seconds and fail its unfinished tests. 0 = no timeout. */
+    var testTimeoutSeconds by property(30)
     /** Empty = find `dotnet` automatically. */
     var dotnetPath by string("")
     /** Tool window: hide excluded projects, classes and tests. */
