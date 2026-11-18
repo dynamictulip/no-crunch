@@ -29,9 +29,6 @@ import com.intellij.util.ui.tree.TreeUtil
 import com.nocrunch.rider.NoCrunchService
 import com.nocrunch.rider.settings.NoCrunchConfigurable
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import java.awt.BorderLayout
 import java.awt.event.MouseAdapter
@@ -246,42 +243,18 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         Disposer.register(parent) { job.cancel() }
     }
 
-    @OptIn(FlowPreview::class)
+    /** The model is built off the EDT, at a steady rate, and shared with the tool window icon and status bar. */
     private suspend fun collect() {
-        combine(service.tests, service.builds, service.runs, service.exclusions, service.state) { t, b, r, e, s -> Snapshot(t, b, r, e, s) }
-            .debounce(100)
-            .collect { render(it) }
+        NoCrunchResults.getInstance(project).snapshots.collect { render(it) }
     }
 
-    private data class Snapshot(
-        val tests: Map<String, com.nocrunch.rider.engine.TestResultDto>,
-        val builds: Map<String, com.nocrunch.rider.engine.BuildFinishedDto>,
-        val runs: Map<String, com.nocrunch.rider.engine.RunFinishedDto>,
-        val rules: List<com.nocrunch.rider.engine.ExclusionRuleDto>,
-        val state: com.nocrunch.rider.EngineUiState,
-    )
+    private var last: ResultsSnapshot? = null
 
-    private var last: Snapshot? = null
-
-    /** Source text by path, re-read when the file changes; for parameter names of data rows. */
-    private val sourceCache = HashMap<String, Pair<Long, String>>()
-
-    private fun paramNames(d: com.nocrunch.rider.engine.TestResultDto): List<String>? {
-        val path = d.filePath ?: return null
-        val line = d.line ?: return null
-        val file = java.io.File(path)
-        val modified = file.lastModified().takeIf { it > 0 } ?: return null
-        val text = sourceCache[path]?.takeIf { it.first == modified }?.second
-            ?: runCatching { file.readText() }.getOrNull()?.also { sourceCache[path] = modified to it } ?: return null
-        return TestLocator.parameterNames(text, line - 1, d.method?.substringBefore('('))
-    }
-
-    private fun render(s: Snapshot) {
+    private fun render(s: ResultsSnapshot) {
         last = s
-        // One build serves the bar (every test) and the tree (filtered).
-        val full = TestTreeModel.buildAll(s.tests.values, s.builds, s.rules, s.runs, ::paramNames)
-        val model = TestTreeModel.filter(full, failuresOnly, settings.state.hideExcluded)
-        bar.update(ProgressBarModel.forModel(full, s.builds, s.state))
+        // The shared model has every test (the bar counts them all); the tree shows it through the view filters.
+        val model = TestTreeModel.filter(s.projects, failuresOnly, settings.state.hideExcluded)
+        bar.update(s.bar)
         // While paused, results can't be trusted, so hide them behind a big Resume button.
         val paused = s.state.state == "paused"
         if (paused) waitingLabel.text = StatusText.waiting(s.state.queued)
