@@ -85,6 +85,19 @@ class TestTreeModelTest {
     }
 
     @Test
+    fun filtered_rows_count_only_the_tests_they_show() {
+        val tree = TestTreeModel.build(listOf(
+            t(unit, "A.Calc", "Adds", "passed"),
+            t(unit, "A.Calc", "Divides", "failed"),
+            t(unit, "A.Calc", "Subtracts", "passed"),
+        ), emptyMap(), emptyList(), failuresOnly = true)
+
+        val project = tree.single()
+        assertEquals(Counts(passed = 0, failed = 1), project.children.single().counts)
+        assertEquals(Counts(passed = 0, failed = 1), project.counts)
+    }
+
+    @Test
     fun build_failed_project_has_status() {
         val builds = mapOf(
             "src/Core/Core.csproj" to BuildFinishedDto("src/Core/Core.csproj", "failed", "error CS1002", null),

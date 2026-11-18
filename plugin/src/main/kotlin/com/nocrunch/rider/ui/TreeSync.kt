@@ -1,8 +1,10 @@
 package com.nocrunch.rider.ui
 
 import com.intellij.ui.CheckedTreeNode
+import javax.swing.JTree
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
+import javax.swing.tree.TreePath
 
 /** The row a tree should show. [key] identifies it among its siblings from one update to the next. */
 data class TreeSpec(
@@ -22,6 +24,19 @@ class KeyedTreeNode(val key: String, userObject: Any) : CheckedTreeNode(userObje
  * scroll position (reloading the whole model clears them all).
  */
 object TreeSync {
+    /**
+     * [sync] for a tree whose root is hidden. Swing collapses a node when its last child goes, and rows under a
+     * collapsed hidden root never show, so once the tree had been empty (e.g. Show Failures Only with nothing failing)
+     * nothing would appear again. The root is kept open, and top-level rows that weren't there before open expanded;
+     * rows that stayed keep whatever expansion the user gave them.
+     */
+    fun syncTree(tree: JTree, root: DefaultMutableTreeNode, desired: List<TreeSpec>) {
+        val before = children(root).map { it.key }.toSet()
+        sync(tree.model as DefaultTreeModel, root, desired)
+        if (root.childCount > 0) tree.expandPath(TreePath(root))
+        for (row in children(root)) if (row.key !in before) tree.expandPath(TreePath(arrayOf(root, row)))
+    }
+
     fun sync(model: DefaultTreeModel, parent: DefaultMutableTreeNode, desired: List<TreeSpec>) {
         val keys = uniqueKeys(desired)
         val wanted = keys.withIndex().associate { (i, k) -> k to i }

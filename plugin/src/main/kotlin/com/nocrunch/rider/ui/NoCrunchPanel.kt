@@ -73,7 +73,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private var failuresOnly = false
     private val settings = com.nocrunch.rider.settings.NoCrunchSettings.getInstance(project)
     private var rebuilding = false
-    private var lastModel: List<ProjectNode> = emptyList()
+    /** The model the tree shows; null forces the next render to sync (an empty list would match an empty model). */
+    private var lastModel: List<ProjectNode>? = null
 
     /**
      * "Break into First Failing Test": the first failing test in the selection (tree order), debugged by name with a
@@ -273,7 +274,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         try {
             // Updated in place, not rebuilt: reloading the model cleared the selection (and the details pane with
             // it), collapsed a multi-selection to one row and re-expanded everything after Collapse All.
-            TreeSync.sync(treeModel, root, specs(model))
+            TreeSync.syncTree(tree, root, specs(model))
             // The green tick highlights depend on whether anything fails anywhere, so every row may look different.
             if (anyFailures != failuresBefore) TreeUtil.treeNodeTraverser(root).forEach { treeModel.nodeChanged(it as CheckedTreeNode) }
             // A row that moved (sorting by status or run time) was taken out and put back, which collapses and
@@ -286,20 +287,12 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 if (key in selected) reselect += path
             }
             if (reselect.isNotEmpty() && reselect.size != tree.selectionCount) tree.selectionPaths = reselect.toTypedArray()
-            // Projects start expanded the first time there's anything to show; after that expansion is the user's.
-            if (firstLoad && root.childCount > 0) {
-                firstLoad = false
-                for (i in 0 until root.childCount) tree.expandPath(TreePath(arrayOf(root, root.getChildAt(i))))
-            }
         } finally {
             rebuilding = false
         }
         // The selected row's results may have changed; the pane leaves itself alone if its text hasn't.
         showDetails(selectedNode())
     }
-
-    /** Set until the tree first shows something, so projects are expanded once rather than whenever nothing is. */
-    private var firstLoad = true
 
     private val sortMode: SortMode
         get() = SortMode.entries.firstOrNull { it.name == settings.state.sortMode } ?: SortMode.NAME
@@ -460,7 +453,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             add(simple("Run All Tests", AllIcons.RunConfigurations.TestState.Run_run) { service.runAll() })
             add(simple("Run All Tests Including Excluded", RUN_ALL_INCLUDING_EXCLUDED) {
                 // Show results for excluded tests too, even if they were hidden.
-                if (settings.state.hideExcluded) { settings.state.hideExcluded = false; lastModel = emptyList(); last?.let(::render) }
+                if (settings.state.hideExcluded) { settings.state.hideExcluded = false; lastModel = null; last?.let(::render) }
                 service.runAllIncludingExcluded()
             })
             add(runSelectedAction)
@@ -480,7 +473,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 override fun isSelected(e: AnActionEvent) = failuresOnly
                 override fun setSelected(e: AnActionEvent, state: Boolean) {
                     failuresOnly = state
-                    lastModel = emptyList()
+                    lastModel = null
                     last?.let(::render)
                 }
             })
@@ -489,7 +482,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                 override fun isSelected(e: AnActionEvent) = settings.state.hideExcluded
                 override fun setSelected(e: AnActionEvent, state: Boolean) {
                     settings.state.hideExcluded = state
-                    lastModel = emptyList()
+                    lastModel = null
                     last?.let(::render)
                 }
             })
@@ -504,7 +497,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     override fun setSelected(e: AnActionEvent, state: Boolean) {
                         if (!state) return
                         settings.state.viewMode = mode.name
-                        lastModel = emptyList()
+                        lastModel = null
                         last?.let(::render)
                     }
                 })
@@ -531,7 +524,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
                     override fun setSelected(e: AnActionEvent, state: Boolean) {
                         if (!state) return
                         settings.state.sortMode = mode.name
-                        lastModel = emptyList()
+                        lastModel = null
                         last?.let(::render)
                     }
                 })
@@ -544,7 +537,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             override fun isSelected(e: AnActionEvent) = choosingTests
             override fun setSelected(e: AnActionEvent, state: Boolean) {
                 choosingTests = state
-                lastModel = emptyList()
+                lastModel = null
                 last?.let(::render)
             }
         })
