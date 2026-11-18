@@ -186,7 +186,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
             }
             "testResults" -> gson.fromJson(params, TestResultsDto::class.java).let { r -> _tests.update { it + r.updates.associateBy { u -> u.key } } }
             "projectRunFinished" -> gson.fromJson(params, RunFinishedDto::class.java).let { r -> _runs.update { it + (r.project to r) } }
-            "log" -> gson.fromJson(params, LogDto::class.java).let { if (it.level == "error") log.warn(it.message) else log.info(it.message) }
+            "log" -> gson.fromJson(params, LogDto::class.java).let { if (it.level == "error" || it.level == "warning") log.warn(it.message) else log.info(it.message) }
         }
     }
 
