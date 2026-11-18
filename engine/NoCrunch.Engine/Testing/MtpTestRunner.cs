@@ -1,14 +1,26 @@
 using System.Threading.Channels;
 using Microsoft.Testing.Platform.ServerMode.Client;
+using Microsoft.Testing.Platform.ServerMode.Client.Protocol.ServerMode;
 using NoCrunch.Engine.Graph;
 using NoCrunch.Engine.Layout;
 
 namespace NoCrunch.Engine.Testing;
 
-/// <summary>Discovers and runs one MTP test application via server mode (JSON-RPC).</summary>
-public sealed class MtpTestRunner(PathMap map) : NoCrunch.Engine.Core.ITestStep
+/// <summary>Raised when a test application's server mode speaks a protocol version we can't use.</summary>
+internal sealed class UnsupportedMtpVersionException(string message, Exception inner) : Exception(message, inner);
+
+/// <summary>
+/// Discovers and runs one MTP test application via server mode (JSON-RPC).
+/// <paramref name="testTimeout"/>: when a run reports nothing (no test result or progress) for this long, its test host
+/// is stopped and the tests it hadn't finished fail. Null = no timeout.
+/// </summary>
+public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : NoCrunch.Engine.Core.ITestStep
 {
-    private const string ProtocolErrorExitCodeHint = "12";
+    /// <summary>MTP's exit code for "incompatible protocol version".</summary>
+    private const int IncompatibleProtocolVersionExitCode = 12;
+
+    /// <summary>How long to wait for a test host that hung up during the handshake to exit, so its exit code can be read.</summary>
+    private static readonly TimeSpan HandshakeExitWait = TimeSpan.FromSeconds(2);
 
     public async Task<ProjectRunOutcome> RunAsync(
         ProjectInfo project,
@@ -31,32 +43,28 @@ public sealed class MtpTestRunner(PathMap map) : NoCrunch.Engine.Core.ITestStep
         try
         {
             var discovered = await DiscoverAsync(project, ct);
-            var toRun = new List<string>();
+            var queued = new List<TestResultUpdate>();
             var initial = new List<TestResultUpdate>();
             foreach (var t in discovered)
             {
-                var included = shouldRun(t.Id);
-                if (included) toRun.Add(t.Id.Uid);
-                initial.Add(t with { State = included ? TestState.Queued : TestState.Excluded });
+                var u = t with { State = shouldRun(t.Id) ? TestState.Queued : TestState.Excluded };
+                if (u.State == TestState.Queued) queued.Add(u);
+                initial.Add(u);
             }
             updates.Writer.TryWrite(initial);
 
-            if (toRun.Count > 0) await ExecuteAsync(project, toRun, updates.Writer, ct);
-            return new ProjectRunOutcome(name, ProjectRunStatus.Completed, null);
+            var timedOut = queued.Count > 0 ? await ExecuteAsync(project, queued, updates.Writer, ct) : null;
+            // A timed-out run still ends normally: every test it was asked to run now has a result (the unfinished
+            // ones failed), and the error says why the test host was stopped.
+            return new ProjectRunOutcome(name, ProjectRunStatus.Completed, timedOut);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             return new ProjectRunOutcome(name, ProjectRunStatus.Cancelled, null);
         }
-        catch (MtpServerClientException ex) when (ex is not MtpServerConnectionClosedException
-                                                  && (ex.Message.Contains("protocol", StringComparison.OrdinalIgnoreCase)
-                                                      || ex.Message.Contains(ProtocolErrorExitCodeHint, StringComparison.Ordinal)))
-        {
-            return new ProjectRunOutcome(name, ProjectRunStatus.UnsupportedMtpVersion, ex.Message);
-        }
         catch (Exception ex)
         {
-            return new ProjectRunOutcome(name, ProjectRunStatus.Crashed, ex.Message);
+            return ToOutcome(name, ex);
         }
         finally
         {
@@ -64,6 +72,24 @@ public sealed class MtpTestRunner(PathMap map) : NoCrunch.Engine.Core.ITestStep
             await pump;
         }
     }
+
+    /// <summary>The outcome of a run that threw <paramref name="ex"/> (other than by being cancelled).</summary>
+    internal static ProjectRunOutcome ToOutcome(string project, Exception ex) => ex is UnsupportedMtpVersionException
+        ? new ProjectRunOutcome(project, ProjectRunStatus.UnsupportedMtpVersion, ex.Message)
+        : new ProjectRunOutcome(project, ProjectRunStatus.Crashed, ex.Message);
+
+    /// <summary>
+    /// Whether a failed initialize handshake means the test application's MTP doesn't speak our protocol version:
+    /// the server refused it with its dedicated error code, the client refused the version the server picked (the only
+    /// plain <see cref="MtpServerClientException"/>s the handshake throws are about the version or a malformed reply),
+    /// or the server hung up and exited with MTP's incompatible-protocol exit code.
+    /// </summary>
+    internal static bool IsProtocolRejection(MtpServerClientException ex, int? serverExitCode) => ex switch
+    {
+        MtpServerErrorException e => e.ErrorCode == ErrorCodes.ProtocolVersionNotSupported,
+        MtpServerConnectionClosedException => serverExitCode == IncompatibleProtocolVersionExitCode,
+        _ => ex.GetType() == typeof(MtpServerClientException),
+    };
 
     private async Task<List<TestResultUpdate>> DiscoverAsync(ProjectInfo project, CancellationToken ct)
     {
@@ -81,32 +107,88 @@ public sealed class MtpTestRunner(PathMap map) : NoCrunch.Engine.Core.ITestStep
         return found.Values.ToList();
     }
 
-    private async Task ExecuteAsync(ProjectInfo project, IReadOnlyCollection<string> uids,
+    /// <summary>
+    /// Runs <paramref name="queued"/>. Returns null when the run finished, or why it was stopped when it reported nothing
+    /// for the test timeout: then its test host has been stopped and its unfinished tests reported as failed.
+    /// </summary>
+    private async Task<string?> ExecuteAsync(ProjectInfo project, IReadOnlyList<TestResultUpdate> queued,
         ChannelWriter<IReadOnlyList<TestResultUpdate>> writer, CancellationToken ct)
     {
-        await WithClientAsync(project, async client =>
+        var gate = new object();
+        var stopped = false;
+        var latest = queued.ToDictionary(q => q.Id.Key, StringComparer.Ordinal);
+        var reportedUids = new HashSet<string>(StringComparer.Ordinal);
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        // (Re)starts the inactivity timer. Only call under gate while not stopped (the source is disposed after that).
+        void Arm()
         {
-            client.TestNodesUpdated += (_, e) =>
+            if (testTimeout is { } t) watchdog.CancelAfter(t);
+        }
+
+        try
+        {
+            await WithClientAsync(project, async client =>
             {
-                var batch = new List<TestResultUpdate>();
-                foreach (var change in e.Changes)
+                client.TestNodesUpdated += (_, e) =>
                 {
-                    if (!IsTest(change) || change.Uid is null) continue;
-                    if (change.Node.TryGetValue("retry.is-superseded", out var superseded) && superseded is true) continue;
-                    var state = change.ExecutionState switch
+                    lock (gate)
                     {
-                        "discovered" or null => (TestState?)null,
-                        "in-progress" => TestState.Running,
-                        "passed" => TestState.Passed,
-                        "skipped" => TestState.Skipped,
-                        _ => TestState.Failed,
-                    };
-                    if (state is { } s) batch.Add(ToUpdate(project, change, s));
-                }
-                if (batch.Count > 0) writer.TryWrite(batch);
-            };
-            await client.RunTestsAsync(uids, ct);
-        }, ct);
+                        if (stopped) return;
+                        Arm();
+                        var batch = new List<TestResultUpdate>();
+                        foreach (var change in e.Changes)
+                        {
+                            if (!IsTest(change) || change.Uid is null) continue;
+                            if (change.Node.TryGetValue("retry.is-superseded", out var superseded) && superseded is true) continue;
+                            var state = change.ExecutionState switch
+                            {
+                                "discovered" or null => (TestState?)null,
+                                "in-progress" => TestState.Running,
+                                "passed" => TestState.Passed,
+                                "skipped" => TestState.Skipped,
+                                _ => TestState.Failed,
+                            };
+                            if (state is not { } s) continue;
+                            var u = ToUpdate(project, change, s);
+                            latest[u.Id.Key] = u;
+                            reportedUids.Add(u.Id.Uid);
+                            batch.Add(u);
+                        }
+                        if (batch.Count > 0) writer.TryWrite(batch);
+                    }
+                };
+                lock (gate) Arm();
+                await client.RunTestsAsync(queued.Select(q => q.Id.Uid).Distinct(StringComparer.Ordinal).ToList(), watchdog.Token);
+            }, ct);
+            return null;
+        }
+        catch (OperationCanceledException) when (watchdog.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // WithClientAsync has already shut the test host down (killing its process tree).
+            var seconds = $"{testTimeout!.Value.TotalSeconds:0.###} s";
+            lock (gate)
+            {
+                stopped = true;
+                var failed = latest.Values
+                    .Where(r => r.State == TestState.Running
+                                // Rows of a theory report under the theory's UID; the theory itself is settled from its rows.
+                                || (r.State == TestState.Queued && !reportedUids.Contains(r.Id.Uid)))
+                    .Select(r => r with
+                    {
+                        State = TestState.Failed, DurationMs = null, StackTrace = null,
+                        Message = r.State == TestState.Running
+                            ? $"Timed out: no result for {seconds}"
+                            : $"Not run: the test run was stopped after {seconds} with no result",
+                    })
+                    .ToList();
+                if (failed.Count > 0) writer.TryWrite(failed);
+            }
+            return $"Timed out: the test run reported nothing for {seconds}, so its test host was stopped.";
+        }
+        finally
+        {
+            lock (gate) stopped = true;
+        }
     }
 
     private static async Task WithClientAsync(ProjectInfo project, Func<IMtpServerClient, Task> body, CancellationToken ct)
@@ -116,7 +198,7 @@ public sealed class MtpTestRunner(PathMap map) : NoCrunch.Engine.Core.ITestStep
         using IMtpServerClient client = await MtpServerClient.LaunchAsync(project.TargetPath!, options, ct);
         try
         {
-            var caps = await client.InitializeAsync(ct);
+            var caps = await InitializeAsync(client, ct);
             if (caps.MultiConnectionProvider)
                 throw new NotSupportedException("Test application opened a passive controller connection; not supported.");
             await body(client);
@@ -125,6 +207,27 @@ public sealed class MtpTestRunner(PathMap map) : NoCrunch.Engine.Core.ITestStep
         finally
         {
             await client.ShutdownAsync();
+        }
+    }
+
+    private static async Task<MtpServerCapabilities> InitializeAsync(IMtpServerClient client, CancellationToken ct)
+    {
+        try
+        {
+            return await client.InitializeAsync(ct);
+        }
+        catch (MtpServerClientException ex) when (!ct.IsCancellationRequested)
+        {
+            int? exitCode = null;
+            if (ex is MtpServerConnectionClosedException)
+            {
+                // The host may still be exiting; give it a moment so its exit code can be read.
+                var until = DateTime.UtcNow + HandshakeExitWait;
+                while ((exitCode = client.ServerExitCode) is null && DateTime.UtcNow < until)
+                    await Task.Delay(50, CancellationToken.None);
+            }
+            if (IsProtocolRejection(ex, exitCode)) throw new UnsupportedMtpVersionException(ex.Message, ex);
+            throw;
         }
     }
 
