@@ -234,7 +234,7 @@ public sealed class EngineCore(
         // Until the cycle has worked out its projects (or with no graph to map files), any new work interrupts it.
         if (_cycleProjects is not { } running || _graph is not { } graph) return true;
         var p = _pending;
-        if (p.Reconcile || p.Initialize || p.NeedGraph || p.Restore || p.All || p.UnknownTestProjects) return true;
+        if (p.Reconcile || p.Initialize || p.NeedGraph || p.Restore || p.All) return true;
         // Project files can change references, and .gitignore which files are in the mirror: neither maps to a fixed set.
         if (p.FilesRel.Any(f => ProjectGraph.IsGraphFile(f) || Path.GetFileName(f) == ".gitignore")) return true;
         var touched = graph.DirtyProjects(p.FilesRel).ToHashSet(StringComparer.Ordinal);
@@ -289,12 +289,6 @@ public sealed class EngineCore(
             var manualProjects = runKeys.Select(ProjectOfKey).OfType<string>().Where(p => graph.Find(p) is not null).ToHashSet(StringComparer.Ordinal);
             var manualOnly = manualProjects.Where(p => !dirty.Contains(p)).ToHashSet(StringComparer.Ordinal);
             dirty.UnionWith(manualProjects);
-            if (snap.UnknownTestProjects)
-            {
-                lock (_lock)
-                    dirty.UnionWith(graph.Projects.Where(p => p.IsTestProject && !_results.Values.Any(r => r.Id.Project == p.RepoRelativePath))
-                        .Select(p => p.RepoRelativePath));
-            }
 
             // Test projects excluded as a whole aren't built or run, unless a test in them was asked for by hand.
             HashSet<string> skipped;
@@ -324,7 +318,7 @@ public sealed class EngineCore(
             HashSet<string> previouslyFailing;
             lock (_lock)
                 previouslyFailing = _results.Values.Where(r => r.State == TestState.Failed).Select(r => r.Id.Project).ToHashSet(StringComparer.Ordinal);
-            await MarkStaleAsync(graph, dirty.Where(p => !manualOnly.Contains(p)).ToHashSet(StringComparer.Ordinal));
+            await MarkStaleAsync(dirty.Where(p => !manualOnly.Contains(p)).ToHashSet(StringComparer.Ordinal));
             await events.StateChanged(EngineState.Building, dirty.Count);
             var outcomes = await build.BuildAsync(graph.InBuildOrder(dirty),
                 p => events.ProjectBuildStarted(p.RepoRelativePath),
@@ -426,7 +420,6 @@ public sealed class EngineCore(
             {
                 _pending.SyncedRel.UnionWith(synced);
                 _pending.All |= snap.All;
-                _pending.UnknownTestProjects |= snap.UnknownTestProjects;
             }
             _pending.NeedGraph |= needGraph;
             _pending.Restore |= restore;
@@ -610,7 +603,7 @@ public sealed class EngineCore(
     private HashSet<string> UidsOf(IReadOnlySet<string> keys) =>
         keys.Count == 0 ? [] : _results.Values.Where(r => keys.Contains(r.Id.Key)).Select(r => r.Id.Uid).ToHashSet(StringComparer.Ordinal);
 
-    private async Task MarkStaleAsync(ProjectGraph graph, IReadOnlySet<string> dirty)
+    private async Task MarkStaleAsync(IReadOnlySet<string> dirty)
     {
         List<TestResultUpdate> stale;
         lock (_lock)
@@ -665,12 +658,11 @@ public sealed class EngineCore(
         public bool NeedGraph { get; set; }
         public bool Restore { get; set; }
         public bool All { get; set; }
-        public bool UnknownTestProjects { get; set; }
 
         /// <summary>Changed files not yet built; a pending full reconcile counts as "more than the threshold".</summary>
         public int WaitingFiles => Reconcile ? Math.Max(Files.Count + SyncedRel.Count, ReconcileThreshold + 1) : Files.Count + SyncedRel.Count;
 
         public bool IsEmpty => Files.Count == 0 && SyncedRel.Count == 0 && Projects.Count == 0 && ManualKeys.Count == 0 && RerunKeys.Count == 0
-                               && !Reconcile && !Initialize && !NeedGraph && !Restore && !All && !UnknownTestProjects;
+                               && !Reconcile && !Initialize && !NeedGraph && !Restore && !All;
     }
 }
