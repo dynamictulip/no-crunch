@@ -10,7 +10,8 @@ import com.intellij.util.Consumer
 import com.nocrunch.rider.NoCrunchService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.awt.Component
 import java.awt.event.MouseEvent
@@ -39,22 +40,14 @@ private class NoCrunchStatusWidget(private val project: Project) : StatusBarWidg
     override fun install(statusBar: StatusBar) {
         val service = NoCrunchService.getInstance(project)
         job = service.scope.launch(Dispatchers.EDT) {
-            combine(service.state, service.tests, service.builds) { s, t, b -> Triple(s, t, b) }.collect { (s, t, b) ->
-                val failed = t.values.count { it.state == "failed" }
-                val brokenBuilds = b.values.count { it.status == "failed" }
-                text = when {
-                    s.state == "error" -> "No Crunch: error"
-                    s.state == "paused" -> "No Crunch: paused"
-                    s.state == "building" || s.state == "syncing" -> "No Crunch: building…"
-                    s.state == "testing" -> "No Crunch: testing…"
-                    brokenBuilds > 0 -> "No Crunch: ✖ build"
-                    failed > 0 -> "No Crunch: ✖ $failed"
-                    s.state == "starting" -> "No Crunch: starting…"
-                    s.state == "stopped" -> "No Crunch"
-                    else -> "No Crunch: ✔"
+            // Same model and counts as the tree and progress bar, so all three agree.
+            NoCrunchResults.getInstance(project).snapshots
+                .map { StatusText.widget(it.state, it.counts, it.brokenBuilds) }
+                .distinctUntilChanged()
+                .collect {
+                    text = it
+                    statusBar.updateWidget(WIDGET_ID)
                 }
-                statusBar.updateWidget(WIDGET_ID)
-            }
         }
     }
 
