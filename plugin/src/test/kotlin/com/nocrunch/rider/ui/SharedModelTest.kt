@@ -1,0 +1,61 @@
+package com.nocrunch.rider.ui
+
+import com.nocrunch.rider.engine.BuildFinishedDto
+import com.nocrunch.rider.engine.ExclusionRuleDto
+import com.nocrunch.rider.engine.TestResultDto
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertSame
+import org.junit.jupiter.api.Test
+
+/** The whole tree is built once per batch and shared; view filters and aggregates come from that one build. */
+class SharedModelTest {
+    private val unit = "tests/Unit/Unit.csproj"
+    private val e2e = "tests/E2E/E2E.csproj"
+    private val core = "src/Core/Core.csproj"
+
+    private fun t(project: String, type: String, method: String, state: String, lastOutcome: String? = null) = TestResultDto(
+        key = "$project|$type|$method", project = project, type = type, method = method, uid = "$type.$method", variant = null,
+        displayName = method, state = state, durationMs = 5.0, message = null, stackTrace = null,
+        filePath = "/repo/${project.substringBeforeLast('/')}/${type.substringAfterLast('.')}.cs", line = 1, lastOutcome = lastOutcome,
+    )
+
+    private val tests = listOf(
+        t(unit, "Shop.Unit.Calc", "Adds", "passed"),
+        t(unit, "Shop.Unit.Calc", "Subtracts", "stale", lastOutcome = "failed"),
+        t(unit, "Shop.Unit.Pricing.Tax", "Vat", "failed"),
+        t(e2e, "Shop.E2E.Flow", "Checkout", "passed"),
+        t(e2e, "Shop.E2E.Flow", "Refund", "excluded"),
+    )
+    private val builds = mapOf(core to BuildFinishedDto(core, "failed", "error", null))
+    private val rules = listOf(ExclusionRuleDto(e2e, "Shop.E2E.Flow", "Refund"))
+
+    @Test
+    fun filtering_the_full_build_matches_building_with_the_filters() {
+        val full = TestTreeModel.build(tests, builds, rules, failuresOnly = false)
+        for (failuresOnly in listOf(false, true)) for (hideExcluded in listOf(false, true)) {
+            assertEquals(
+                TestTreeModel.build(tests, builds, rules, failuresOnly, hideExcluded = hideExcluded),
+                TestTreeModel.filter(full, failuresOnly, hideExcluded),
+                "failuresOnly=$failuresOnly hideExcluded=$hideExcluded",
+            )
+        }
+    }
+
+    @Test
+    fun totals_are_worked_out_once_not_on_every_read() {
+        val project = TestTreeModel.build(tests, builds, rules, failuresOnly = false).single { it.path == unit }
+        assertSame(project.counts, project.counts)
+        assertSame(project.children.first().counts, project.children.first().counts)
+        for (mode in listOf(ViewMode.NAMESPACES, ViewMode.FILES)) {
+            val group = TreeView.of(project, mode).filterIsInstance<GroupView>().first()
+            assertSame(group.leaves, group.leaves, "$mode")
+            assertSame(group.counts, group.counts, "$mode")
+        }
+    }
+
+    @Test
+    fun the_bar_counts_every_test_whatever_the_view_filters() {
+        val full = TestTreeModel.build(tests, builds, rules, failuresOnly = false)
+        assertEquals(Counts(passed = 2, failed = 1, pending = 1), ProgressBarModel.totals(full))
+    }
+}

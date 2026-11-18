@@ -20,10 +20,19 @@ class DetailsPane(private val project: Project, parent: Disposable) {
 
     val component: JComponent get() = console.component
 
-    /** Shows text built with [Text]: normal, with only the failure words in red and side notes in grey. */
+    /** What's showing, so redrawing the same text (a result batch that didn't touch this row) is skipped. */
+    private var shown: List<Pair<String, ConsoleViewContentType>>? = null
+
+    /**
+     * Shows text built with [Text]: normal, with only the failure words in red and side notes in grey. Leaves the
+     * console alone if the text is what it already shows, so its scroll position survives updates to other rows.
+     */
     fun show(build: Text.() -> Unit) {
+        val parts = Text().apply(build).parts.toList()
+        if (parts == shown) return
+        shown = parts
         console.clear()
-        Text().apply(build).parts.forEach { (text, type) -> console.print(text, type) }
+        parts.forEach { (text, type) -> console.print(text, type) }
     }
 
     class Text {
@@ -42,7 +51,10 @@ class DetailsPane(private val project: Project, parent: Disposable) {
         )
     }
 
-    fun clear() = console.clear()
+    fun clear() {
+        shown = null
+        console.clear()
+    }
 }
 
 /** Links `in /path/File.cs:line 12` (stack traces) and `/path/File.cs(12,5): error` (compiler output). */

@@ -18,7 +18,10 @@ enum class SortMode(val title: String) {
     DURATION("Run time"),
 }
 
-/** A row below a project. Aggregates (counts, run time, freshness) are computed from the tests underneath. */
+/**
+ * A row below a project. Aggregates (counts, run time, freshness) are worked out from the tests underneath once, when
+ * the row is made: the renderer reads them for every painted row.
+ */
 sealed interface ViewNode {
     val label: String
     val leaves: List<TestNode>
@@ -29,18 +32,20 @@ sealed interface ViewNode {
     val locked: Boolean
     /** The row above it is excluded, so "(excluded)" isn't worth repeating. */
     val parentExcluded: Boolean
+    val totals: Totals
 
-    val counts: Counts get() = leaves.fold(Counts()) { acc, t -> acc + t.counts }
-    val durationMs: Double? get() = leaves.mapNotNull { it.countedDurationMs }.takeIf { it.isNotEmpty() }?.sum()
-    val manualCount: Int get() = leaves.count { it.manual && it.countsForParents }
-    val shownOutcome: String? get() = TestTreeModel.worst(leaves.filter { it.countsForParents }.mapNotNull { it.shownOutcome })
-    val freshness: String? get() = TestTreeModel.summarise(leaves.filter { it.countsForParents }.mapNotNull { it.freshness })
+    val counts: Counts get() = totals.counts
+    val durationMs: Double? get() = totals.durationMs
+    val manualCount: Int get() = totals.manualCount
+    val shownOutcome: String? get() = totals.shownOutcome
+    val freshness: String? get() = totals.freshness
     val isFresh: Boolean get() = freshness == null
 }
 
 data class TestView(val node: TestNode) : ViewNode {
     override val label get() = node.label
-    override val leaves get() = listOf(node)
+    override val leaves = listOf(node)
+    override val totals = Totals.of(leaves)
     override val rules get() = listOf(TestTreeModel.ruleFor(node.dto))
     override val excluded get() = node.excluded
     override val locked get() = node.locked
@@ -48,8 +53,9 @@ data class TestView(val node: TestNode) : ViewNode {
 }
 
 data class ClassView(val node: ClassNode, override val label: String, val sort: SortMode = SortMode.NAME) : ViewNode {
-    val children: List<TestView> get() = TreeView.sortTests(node.children.map(::TestView), sort)
+    val children: List<TestView> by lazy { TreeView.sortTests(node.children.map(::TestView), sort) }
     override val leaves get() = node.children
+    override val totals get() = node.totals
     override val rules get() = node.rules
     override val excluded get() = node.excluded
     override val locked get() = node.locked
@@ -63,9 +69,10 @@ data class GroupView(
     override val parentExcluded: Boolean,
 ) : ViewNode {
     override val locked get() = false
-    override val leaves get() = children.flatMap { it.leaves }
+    override val leaves = children.flatMap { it.leaves }
+    override val totals = Totals.of(leaves)
     override val rules get() = children.flatMap { it.rules }.distinct()
-    override val excluded get() = children.isNotEmpty() && children.all { it.excluded }
+    override val excluded = children.isNotEmpty() && children.all { it.excluded }
 }
 
 object TreeView {

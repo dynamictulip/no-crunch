@@ -48,42 +48,70 @@ data class TestNode(
         get() = if (isRow) dto.displayName.indexOf('(').takeIf { it >= 0 }?.let { NameColouring.withNames(dto.displayName.substring(it), argNames) } ?: dto.displayName
         else dto.type?.let { dto.displayName.removePrefix("$it.") } ?: dto.displayName
 
-    /** Run time that counts towards parents: excluded tests only count once run by hand. */
-    val countedDurationMs: Double? get() = if (countsForParents) dto.durationMs else null
-
-    /**
-     * Its result counts towards its parents' status, counts, run time and freshness. Excluded tests only count while
-     * they hold a manual run's result that isn't stale yet.
-     */
-    val countsForParents: Boolean get() = !excluded || (manual && freshness != "stale")
+    // Worked out once, when the node is made: the tree renderer and sorting read these over and over.
 
     /** The result comes from a run the user asked for, not from continuous testing. */
-    val manual: Boolean get() = dto.runKind == "manual"
+    val manual: Boolean = dto.runKind == "manual"
 
     /** Outcome to show: the current one, or the last one while the test is stale/queued/running. */
-    val shownOutcome: String? get() = if (dto.state in OUTCOMES) dto.state else dto.lastOutcome
+    val shownOutcome: String? = if (dto.state in OUTCOMES) dto.state else dto.lastOutcome
 
     /** Null when [shownOutcome] is current; otherwise why it isn't (stale, queued, running, ...). */
-    val freshness: String? get() = when {
+    val freshness: String? = when {
         dto.state in OUTCOMES -> null
         // Excluded tests have no result this session until you run them by hand.
         dto.state == "excluded" -> "stale"
         else -> dto.state
     }
 
-    val counts: Counts
-        get() = when {
-            rows.isNotEmpty() -> rows.fold(Counts()) { acc, r -> acc + r.counts }
-            !countsForParents -> Counts()
-            dto.state == "passed" -> Counts(passed = 1)
-            dto.state == "failed" -> Counts(failed = 1)
-            dto.state in PENDING_STATES -> Counts(pending = 1)
-            else -> Counts()
-        }
+    /**
+     * Its result counts towards its parents' status, counts, run time and freshness. Excluded tests only count while
+     * they hold a manual run's result that isn't stale yet.
+     */
+    val countsForParents: Boolean = !excluded || (manual && freshness != "stale")
+
+    /** Run time that counts towards parents: excluded tests only count once run by hand. */
+    val countedDurationMs: Double? = if (countsForParents) dto.durationMs else null
+
+    val counts: Counts = when {
+        rows.isNotEmpty() -> rows.fold(Counts()) { acc, r -> acc + r.counts }
+        !countsForParents -> Counts()
+        dto.state == "passed" -> Counts(passed = 1)
+        dto.state == "failed" -> Counts(failed = 1)
+        dto.state in PENDING_STATES -> Counts(pending = 1)
+        else -> Counts()
+    }
 
     private companion object {
         val PENDING_STATES = setOf("queued", "running", "stale", "discovered")
         val OUTCOMES = setOf("passed", "failed", "skipped")
+    }
+}
+
+/**
+ * What a row above tests shows about them, worked out once when the row is made rather than folded over every test
+ * each time it's read (the renderer reads these for every painted row).
+ */
+data class Totals(
+    val counts: Counts,
+    /** Total run time of the tests below, or null if none has run. */
+    val durationMs: Double?,
+    val manualCount: Int,
+    val shownOutcome: String?,
+    /** Why some results below aren't current: running, queued or stale; null when everything is current. */
+    val freshness: String?,
+) {
+    companion object {
+        fun of(tests: List<TestNode>): Totals {
+            val counting = tests.filter { it.countsForParents }
+            return Totals(
+                counts = tests.fold(Counts()) { acc, t -> acc + t.counts },
+                durationMs = counting.mapNotNull { it.countedDurationMs }.takeIf { it.isNotEmpty() }?.sum(),
+                manualCount = counting.count { it.manual },
+                shownOutcome = TestTreeModel.worst(counting.mapNotNull { it.shownOutcome }),
+                freshness = TestTreeModel.summarise(counting.mapNotNull { it.freshness }),
+            )
+        }
     }
 }
 
@@ -96,13 +124,12 @@ data class ClassNode(
     /** Its project is excluded. */
     val parentExcluded: Boolean = false,
 ) {
-    val counts: Counts get() = children.fold(Counts()) { acc, t -> acc + t.counts }
-    val manualCount: Int get() = children.count { it.manual && it.countsForParents }
-    /** Total run time of the tests below, or null if none has run. */
-    val durationMs: Double? get() = children.mapNotNull { it.countedDurationMs }.takeIf { it.isNotEmpty() }?.sum()
-    val shownOutcome: String? get() = TestTreeModel.worst(children.filter { it.countsForParents }.mapNotNull { it.shownOutcome })
-    /** Why some results below aren't current: running, queued or stale; null when everything is current. */
-    val freshness: String? get() = TestTreeModel.summarise(children.filter { it.countsForParents }.mapNotNull { it.freshness })
+    val totals: Totals = Totals.of(children)
+    val counts: Counts get() = totals.counts
+    val manualCount: Int get() = totals.manualCount
+    val durationMs: Double? get() = totals.durationMs
+    val shownOutcome: String? get() = totals.shownOutcome
+    val freshness: String? get() = totals.freshness
     /** Every shown outcome is current (nothing stale, queued or running). */
     val isFresh: Boolean get() = freshness == null
 
@@ -120,16 +147,22 @@ data class ProjectNode(
     val run: RunFinishedDto?,
     val excluded: Boolean,
     val children: List<ClassNode>,
+    /** The engine knows tests in it, whether or not the view filters show any of them. */
+    val hasTests: Boolean = children.isNotEmpty(),
 ) {
-    val counts: Counts get() = children.fold(Counts()) { acc, c -> acc + c.counts }
-    val manualCount: Int get() = children.sumOf { it.manualCount }
-    val durationMs: Double? get() = children.mapNotNull { it.durationMs }.takeIf { it.isNotEmpty() }?.sum()
-    val shownOutcome: String? get() = TestTreeModel.worst(children.mapNotNull { it.shownOutcome })
-    val freshness: String? get() = TestTreeModel.summarise(children.mapNotNull { it.freshness })
+    val totals: Totals = Totals.of(children.flatMap { it.children })
+    val counts: Counts get() = totals.counts
+    val manualCount: Int get() = totals.manualCount
+    val durationMs: Double? get() = totals.durationMs
+    val shownOutcome: String? get() = totals.shownOutcome
+    val freshness: String? get() = totals.freshness
     val isFresh: Boolean get() = freshness == null
     val rule: ExclusionRuleDto get() = ExclusionRuleDto(path)
-    /** False for library/app projects that only appear because their build broke: no tests found and never run. */
-    val isTestProject: Boolean get() = children.isNotEmpty() || run != null
+    /**
+     * False for library/app projects that only appear because their build broke: no tests found and never run.
+     * Based on every test, not the filtered [children], so filters don't move a test project into "Build errors".
+     */
+    val isTestProject: Boolean get() = hasTests || run != null
     /** Short name of the project whose broken build stops this one, if any. */
     val blockedByName: String? get() = build?.blockedBy?.let(TestTreeModel::shortName)
 }
@@ -147,13 +180,49 @@ object TestTreeModel {
         hideExcluded: Boolean = false,
         /** Parameter names of a test's method, read from its source; used to label data rows that only show values. */
         paramNames: (TestResultDto) -> List<String>? = { null },
+    ): List<ProjectNode> = filter(buildAll(tests, builds, rules, runs, paramNames), failuresOnly, hideExcluded)
+
+    /**
+     * The view filters applied to a model built without them. One unfiltered build per batch of results is shared:
+     * the progress bar, tool window icon and status bar count every test, and the tree filters it.
+     */
+    fun filter(projects: List<ProjectNode>, failuresOnly: Boolean, hideExcluded: Boolean): List<ProjectNode> {
+        if (!failuresOnly && !hideExcluded) return projects
+        return projects.mapNotNull { p ->
+            val classes = p.children
+                .map { c ->
+                    val kept = c.children
+                        // Same outcome the tree shows, so failures stay listed (muted) while stale, queued or
+                        // running, and a theory stays while any of its rows fails.
+                        .filter { !failuresOnly || it.shownOutcome == "failed" || it.rows.any { r -> r.shownOutcome == "failed" } }
+                        .filter { !hideExcluded || !it.excluded }
+                    if (kept.size == c.children.size) c else c.copy(children = kept)
+                }
+                .filter { it.children.isNotEmpty() }
+            val buildBroken = p.buildStatus in setOf("failed", "blocked")
+            when {
+                failuresOnly && classes.isEmpty() && !buildBroken -> null
+                hideExcluded && classes.isEmpty() && p.hasTests && !buildBroken -> null
+                classes.size == p.children.size && classes.indices.all { classes[it] === p.children[it] } -> p
+                else -> p.copy(children = classes)
+            }
+        }
+    }
+
+    /** Every project and test, without the view filters. */
+    fun buildAll(
+        tests: Collection<TestResultDto>,
+        builds: Map<String, BuildFinishedDto>,
+        rules: List<ExclusionRuleDto>,
+        runs: Map<String, RunFinishedDto> = emptyMap(),
+        paramNames: (TestResultDto) -> List<String>? = { null },
     ): List<ProjectNode> {
         val byProject = tests.groupBy { it.project }
         val brokenBuilds = builds.values.filter { it.status in setOf("failed", "blocked") }.map { it.project }
         val unsupported = runs.values.filter { it.status.startsWith("unsupported") }.map { it.project }
         val projectPaths = (byProject.keys + brokenBuilds + unsupported).toSortedSet()
 
-        return projectPaths.mapNotNull { path ->
+        return projectPaths.map { path ->
             val projectExcluded = ExclusionRules.isExcluded(ExclusionRuleDto(path), rules)
             val classes = byProject[path].orEmpty()
                 .groupBy { it.type ?: UNKNOWN_CLASS }
@@ -178,17 +247,11 @@ object TestTreeModel {
                             if (n.rows.isEmpty()) n
                             else n.copy(rows = alignRows(n.rows.map { r -> r.copy(argNames = paramNames(r.dto)) }.sortedWith(compareBy(NaturalOrder) { it.label })))
                         }
-                        .filter { !failuresOnly || it.dto.state == "failed" }
-                        .filter { !hideExcluded || !it.excluded }
                     ClassNode(path, type, classExcluded, nodes, parentExcluded = projectExcluded)
                 }
-                .filter { !failuresOnly || it.children.isNotEmpty() }
-                .filter { !hideExcluded || it.children.isNotEmpty() }
             val build = builds[path]
-            val buildBroken = build?.status in setOf("failed", "blocked")
-            if (failuresOnly && classes.isEmpty() && !buildBroken) return@mapNotNull null
-            if (hideExcluded && classes.isEmpty() && byProject[path].orEmpty().isNotEmpty() && !buildBroken) return@mapNotNull null
-            ProjectNode(path, shortName(path), build?.status, build, runs[path], projectExcluded, classes)
+            ProjectNode(path, shortName(path), build?.status, build, runs[path], projectExcluded, classes,
+                hasTests = byProject[path].orEmpty().isNotEmpty())
         }.sortedBy { it.name }
     }
 

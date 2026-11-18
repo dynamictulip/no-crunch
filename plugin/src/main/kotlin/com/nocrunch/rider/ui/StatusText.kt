@@ -24,6 +24,22 @@ object StatusText {
         else -> describe(s)
     }
 
+    /**
+     * Status bar widget text. [counts] come from the same unfiltered model as the progress bar, so a theory and its
+     * failing rows count once, and excluded tests only count while they hold a current manual result.
+     */
+    fun widget(s: EngineUiState, counts: Counts, brokenBuilds: Int): String = when {
+        s.state == "error" -> "No Crunch: error"
+        s.state == "paused" -> "No Crunch: paused"
+        s.state == "building" || s.state == "syncing" -> "No Crunch: building…"
+        s.state == "testing" -> "No Crunch: testing…"
+        brokenBuilds > 0 -> "No Crunch: ✖ build"
+        counts.failed > 0 -> "No Crunch: ✖ ${counts.failed}"
+        s.state == "starting" -> "No Crunch: starting…"
+        s.state == "stopped" -> "No Crunch"
+        else -> "No Crunch: ✔"
+    }
+
     /** Shown on the paused screen. The engine reports more than 200 when a full re-scan is pending. */
     fun waiting(files: Int): String = when {
         files <= 0 -> "No changes waiting"
