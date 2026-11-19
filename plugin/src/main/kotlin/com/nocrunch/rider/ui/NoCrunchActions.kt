@@ -56,7 +56,7 @@ internal class NoCrunchActions(
     private val tree get() = host.tree
     private val paused get() = service.state.value.state == EngineState.PAUSED
 
-    /** The toolbar: everything except Settings greys out while No Crunch is paused. */
+    /** The toolbar: everything except Settings and Restart Engine greys out while No Crunch is paused. */
     fun toolbar(): DefaultActionGroup = pausable(toolbarActions())
 
     fun popup(): DefaultActionGroup = DefaultActionGroup(runSelectedAction, breakIntoFailingAction, Separator.create(),
@@ -111,10 +111,10 @@ internal class NoCrunchActions(
             }
         }
 
-    /** Greys out every toolbar action except Settings while No Crunch is paused. */
+    /** Greys out every toolbar action except Settings and Restart Engine while No Crunch is paused. */
     private fun pausable(group: DefaultActionGroup): DefaultActionGroup = DefaultActionGroup().apply {
         group.getChildActionsOrStubs().forEach { a ->
-            add(if (a is Separator || a.templatePresentation.text == "Settings") a else wrapForPause(a))
+            add(if (a is Separator || enabledWhilePaused(a.templatePresentation.text)) a else wrapForPause(a))
         }
     }
 
@@ -203,16 +203,19 @@ internal class NoCrunchActions(
             }
         })
         addSeparator()
-        add(simple("Restart Engine", AllIcons.Actions.Restart) { service.restart() })
-        add(simple("Settings", AllIcons.General.Settings) {
+        add(simple(SETTINGS, AllIcons.General.Settings) {
             ShowSettingsUtil.getInstance().showSettingsDialog(project, NoCrunchConfigurable::class.java)
         })
+        // Far right and always available: a fresh engine reruns every test, e.g. after a test host crashed.
+        add(simple(RESTART_ENGINE, AllIcons.Actions.Restart,
+            "Restart the No Crunch engine and rerun all tests (e.g. after a test host crashed)") { service.restart() })
     }
 
-    private fun simple(text: String, icon: Icon, action: () -> Unit) = object : AnAction(text, null, icon) {
-        override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        override fun actionPerformed(e: AnActionEvent) = action()
-    }
+    private fun simple(text: String, icon: Icon, description: String? = null, action: () -> Unit) =
+        object : AnAction(text, description, icon) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun actionPerformed(e: AnActionEvent) = action()
+        }
 
     private fun toggle(text: String, isOn: () -> Boolean, set: (Boolean) -> Unit) = object : ToggleAction(text) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
@@ -223,9 +226,15 @@ internal class NoCrunchActions(
     /** One of a set of radio-like options: choosing it again does nothing. */
     private fun choice(text: String, isOn: () -> Boolean, choose: () -> Unit) = toggle(text, isOn) { if (it) choose() }
 
-    private companion object {
+    companion object {
+        const val SETTINGS = "Settings"
+        const val RESTART_ENGINE = "Restart Engine"
+
+        /** Toolbar actions that stay usable while paused: Settings, and restarting (which also unpauses). */
+        fun enabledWhilePaused(text: String?): Boolean = text == SETTINGS || text == RESTART_ENGINE
+
         /** The run-all icon with a small "+" badge: run everything, plus the excluded tests. */
-        val RUN_ALL_INCLUDING_EXCLUDED: Icon = LayeredIcon(2).apply {
+        private val RUN_ALL_INCLUDING_EXCLUDED: Icon = LayeredIcon(2).apply {
             setIcon(AllIcons.RunConfigurations.TestState.Run_run, 0)
             setIcon(IconUtil.scale(AllIcons.General.Add, null, 0.6f), 1, SwingConstants.SOUTH_EAST)
         }
