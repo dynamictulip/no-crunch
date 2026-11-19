@@ -57,6 +57,10 @@ object RecentGroupings {
     fun remember(recent: List<Grouping>, used: Grouping): List<Grouping> =
         (listOf(used) + recent.filter { it != used }).take(MAX)
 
+    /** After a popup visit: the grouping started from (so going back is one click) and then the one ended on; unchanged if they match. */
+    fun afterVisit(recent: List<Grouping>, startedWith: Grouping, now: Grouping): List<Grouping> =
+        if (now == startedWith) recent else remember(remember(recent, startedWith), now)
+
     fun fromSetting(saved: String?): List<Grouping> =
         if (saved.isNullOrBlank()) emptyList()
         else saved.split(";").filter { it.isNotBlank() }.map { Grouping.fromSetting(it, null) }.distinct().take(MAX)

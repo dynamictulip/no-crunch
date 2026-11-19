@@ -60,10 +60,10 @@ internal class GroupByPopup(private val settings: NoCrunchSettings, private val 
     }
 
     private fun remember() {
-        // Only groupings the user actually moved to; opening and closing must not reshuffle the list.
+        // Opening and closing without a change must not reshuffle the list; a change also keeps where it started.
         val now = current
         if (now == startedWith) return
-        state.recentGroupings = RecentGroupings.toSetting(RecentGroupings.remember(RecentGroupings.fromSetting(state.recentGroupings), now))
+        state.recentGroupings = RecentGroupings.toSetting(RecentGroupings.afterVisit(RecentGroupings.fromSetting(state.recentGroupings), startedWith, now))
     }
 
     private fun render() {

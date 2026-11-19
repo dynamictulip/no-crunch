@@ -16,13 +16,18 @@ object TreeSelection {
     }.distinct()
 
     /** Selected rows that can be included/excluded on their own (everything except theory data rows): excluded now, and their rules. */
-    fun exclusionTargets(selected: List<Any?>): List<Pair<Boolean, List<ExclusionRuleDto>>> = selected.mapNotNull { o ->
+    fun exclusionTargets(selected: List<Any?>): List<Pair<Boolean, List<ExclusionRuleDto>>> = selected.flatMap { o ->
         when (o) {
-            is ProjectNode -> if (o.isTestProject) o.excluded to listOf(o.rule) else null
-            is GroupView -> if (!toggleable(o)) null else RowPresentation.groupExcluded(o) to o.rules
-            is ViewNode -> if (o.locked) null else o.excluded to o.rules
-            is TestNode -> if (o.locked) null else o.excluded to listOf(TestExclusions.ruleFor(o.dto))
-            else -> null
+            is ProjectNode -> if (o.isTestProject) listOf(o.excluded to listOf(o.rule)) else emptyList()
+            // A partly excluded group is both: it can be included (everything) or excluded (everything).
+            is GroupView -> when {
+                !toggleable(o) -> emptyList()
+                o.partlyExcluded -> listOf(true to o.rules, false to o.rules)
+                else -> listOf(RowPresentation.groupExcluded(o) to o.rules)
+            }
+            is ViewNode -> if (o.locked) emptyList() else listOf(o.excluded to o.rules)
+            is TestNode -> if (o.locked) emptyList() else listOf(o.excluded to listOf(TestExclusions.ruleFor(o.dto)))
+            else -> emptyList()
         }
     }
 

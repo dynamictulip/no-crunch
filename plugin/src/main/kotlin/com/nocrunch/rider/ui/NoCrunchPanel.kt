@@ -172,6 +172,9 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         val treeModel = tree.model as DefaultTreeModel
         val expanded = TreeUtil.collectExpandedPaths(tree).map { pathKey(it) }.toSet()
         val selected = tree.selectionPaths.orEmpty().map { pathKey(it) }.toSet()
+        val selectedTests = tree.selectionPaths.orEmpty().mapNotNull { ((it.lastPathComponent as? CheckedTreeNode)?.userObject as? TestNode)?.dto?.key }.toSet()
+        // Row keys below the project change with the grouping, so a row's own last key is the fallback for expansion.
+        val expandedLast = expanded.map { it.substringAfterLast('/') }.toSet()
         // The selection listener stays quiet while rows change; the details pane is refreshed once at the end.
         rebuilding = true
         try {
@@ -183,11 +186,23 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
             // A row that moved (sorting by status or run time) was taken out and put back, which collapses and
             // deselects it; put that back.
             val reselect = mutableListOf<TreePath>()
+            val matchedTests = mutableSetOf<String>()
+            val byTestKey = mutableMapOf<String, TreePath>()
             TreeUtil.treeNodeTraverser(root).forEach { node ->
                 val path = TreePath((node as CheckedTreeNode).path)
                 val key = pathKey(path)
-                if (key in expanded && !tree.isExpanded(path)) tree.expandPath(path)
-                if (key in selected) reselect += path
+                if (!tree.isExpanded(path) && !node.isLeaf && (key in expanded || (node as? KeyedTreeNode)?.key in expandedLast)) tree.expandPath(path)
+                if (key in selected) {
+                    reselect += path
+                    (node.userObject as? TestNode)?.let { matchedTests += it.dto.key }
+                }
+                (node.userObject as? TestNode)?.let { byTestKey.putIfAbsent(it.dto.key, path) }
+            }
+            // A regrouped test sits under different rows, so its full path no longer matches; find it by its test key.
+            for (testKey in selectedTests - matchedTests) {
+                val path = byTestKey[testKey] ?: continue
+                reselect += path
+                tree.makeVisible(path)
             }
             if (reselect.isNotEmpty() && reselect.size != tree.selectionCount) tree.selectionPaths = reselect.toTypedArray()
         } finally {

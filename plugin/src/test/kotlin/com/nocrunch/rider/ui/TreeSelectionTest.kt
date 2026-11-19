@@ -54,7 +54,15 @@ class TreeSelectionTest {
 
     @Test
     fun a_group_row_is_excluded_now_only_when_everything_in_it_is() {
-        assertEquals(listOf(false to listOf(ExclusionRuleDto(p))), TreeSelection.exclusionTargets(listOf(unitRow)))
+        // unitRow has one of its tests excluded, so it is partly excluded: offered both ways.
+        val rule = listOf(ExclusionRuleDto(p))
+        assertEquals(listOf(true to rule, false to rule), TreeSelection.exclusionTargets(listOf(unitRow)))
+    }
+
+    @Test
+    fun a_partly_excluded_group_can_be_included_or_excluded() {
+        val rules = listOf(ExclusionRuleDto(p, "A.Calc", "Adds"), ExclusionRuleDto(p, "A.Calc", "Theory"))
+        assertEquals(listOf(true to rules, false to rules), TreeSelection.exclusionTargets(listOf(splitClass)))
     }
 
     @Test

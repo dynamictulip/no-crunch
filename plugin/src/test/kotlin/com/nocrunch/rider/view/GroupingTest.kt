@@ -62,6 +62,16 @@ class GroupingTest {
     }
 
     @Test
+    fun a_visit_remembers_where_it_started_then_where_it_ended() {
+        val a = Grouping(listOf(PROJECT, CLASS))
+        val b = Grouping(listOf(CLASS))
+        assertEquals(listOf(b, a), RecentGroupings.afterVisit(emptyList(), a, b))
+        assertEquals(listOf(b, a), RecentGroupings.afterVisit(listOf(b), a, b))
+        assertEquals(listOf(a), RecentGroupings.afterVisit(listOf(a), a, a))
+        assertEquals(emptyList<Grouping>(), RecentGroupings.afterVisit(emptyList(), a, a))
+    }
+
+    @Test
     fun recent_round_trips() {
         val recent = listOf(Grouping(listOf(PROJECT, CLASS)), Grouping(emptyList()))
         assertEquals("PROJECT,CLASS;-", RecentGroupings.toSetting(recent))
