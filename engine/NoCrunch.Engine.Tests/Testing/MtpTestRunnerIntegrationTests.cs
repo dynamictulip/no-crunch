@@ -37,7 +37,8 @@ public class MtpTestRunnerIntegrationTests
         var (outcome, updates) = await Run(_sample, "Shop.Core.Tests");
 
         Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
-        var final = Final(updates).Values.ToList();
+        // The sample's nested-class tests live in this project too; this test is about the plain class.
+        var final = Final(updates).Values.Where(r => r.Id.Type == "Shop.Core.Tests.PriceCalculatorTests").ToList();
         Assert.AreEqual(2, final.Count);
         foreach (var r in final)
         {
@@ -83,6 +84,23 @@ public class MtpTestRunnerIntegrationTests
 
         var listed = Final(updates).Values.Where(u => u.Id.Method?.StartsWith("Bulk_percent") == true).ToList();
         Assert.IsTrue(listed.All(r => !r.Id.Key.Contains(r.Id.Uid)), "keys that don't clash are left as they were");
+    }
+
+    [TestMethod]
+    [Timeout(120_000)]
+    public async Task Nested_classes_report_their_type_name()
+    {
+        foreach (var (project, expected) in new[]
+        {
+            ("Shop.Core.Tests", "Shop.Core.Tests.Outer+Inner"),
+            ("Shop.Theory.Tests", "Shop.Theory.Tests.Outer+Inner"),
+        })
+        {
+            var (outcome, updates) = await Run(_sample, project);
+            Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
+            var inner = Final(updates).Values.Single(r => r.Id.Method?.StartsWith("Inner_test_one") == true);
+            Assert.AreEqual(expected, inner.Id.Type, project);
+        }
     }
 
     [TestMethod]
