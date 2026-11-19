@@ -121,25 +121,27 @@ object TreeView {
         tests.sortedWith(comparator(sort, { it.label }, { it.leaves }, { it.node.countedDurationMs }))
 
     /** Sorts rows, and recursively the rows inside groups and classes. */
-    internal fun sortViews(nodes: List<ViewNode>, sort: SortMode): List<ViewNode> =
+    internal fun sortViews(nodes: List<ViewNode>, sort: SortMode, parent: GroupKind? = null): List<ViewNode> =
         nodes.map {
             when (it) {
-                is GroupView -> it.copy(children = sortViews(it.children, sort))
+                is GroupView -> it.copy(children = sortViews(it.children, sort, it.kind))
                 is ClassView -> it.copy(sort = sort)
                 is TestView -> it
             }
         }.sortedWith(
-            // Like a file explorer, name order keeps folders first, and "(no file)" and tests that skip a level last.
+            // Like a file explorer, name order keeps folders first, and "(no file)" and tests that skip a level last;
+            // but a class's own tests come before the classes nested in it, as in the source.
             // Broken builds outrank any test result, as in sortProjects.
             when (sort) {
-                SortMode.NAME -> compareBy<ViewNode> { kindRank(it) }.then(comparator(sort, { it.label }, { it.leaves }, { it.durationMs }))
+                SortMode.NAME -> compareBy<ViewNode> { kindRank(it, parent) }.then(comparator(sort, { it.label }, { it.leaves }, { it.durationMs }))
                 SortMode.STATUS -> compareBy<ViewNode> { buildRank((it as? GroupView)?.project?.buildStatus) }
                     .then(comparator(sort, { it.label }, { it.leaves }, { it.durationMs }))
                 SortMode.DURATION -> comparator(sort, { it.label }, { it.leaves }, { it.durationMs })
             }
         )
 
-    private fun kindRank(v: ViewNode): Int = when {
+    private fun kindRank(v: ViewNode, parent: GroupKind?): Int = when {
+        v is TestView && parent == GroupKind.CLASS -> -1
         v is GroupView && v.label == NO_FILE -> 2
         v is GroupView && v.kind == GroupKind.FOLDER -> 0
         v is TestView -> 2

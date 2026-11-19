@@ -111,12 +111,12 @@ object GroupingTree {
                 GroupLevel.FILE -> split(items, rest, parentExcluded, { it.file }) { file, members ->
                     row("file:$file", file.substringAfterLast('/'), GroupKind.FILE, members, parentExcluded) { group(members, rest, it) }
                 }
-                GroupLevel.FOLDER -> nested(items, 0, rest, parentExcluded, GroupKind.FOLDER, "/", { it.folder }) { item, end ->
-                    "folder:" + item.folder!!.subList(0, end).joinToString("/")
-                }
-                GroupLevel.NAMESPACE -> nested(items, 0, rest, parentExcluded, GroupKind.NAMESPACE, ".", { item ->
+                GroupLevel.FOLDER -> nested(items, 0, rest, parentExcluded, GroupKind.FOLDER, "folder:", "/") { it.folder }
+                // Keyed by the namespace as shown, so `Shop.X` and `X` under project `Shop` are one row, as they
+                // always were; the project row above keeps the key unique.
+                GroupLevel.NAMESPACE -> nested(items, 0, rest, parentExcluded, GroupKind.NAMESPACE, "ns:", ".") { item ->
                     item.name?.namespace?.let { it.subList(item.namespaceFrom, it.size) }
-                }) { item, end -> "ns:" + item.name!!.namespace.subList(0, item.namespaceFrom + end).joinToString(".") }
+                }
                 GroupLevel.CLASS -> classes(items, 0, rest, parentExcluded)
             }
         }
@@ -135,16 +135,21 @@ object GroupingTree {
             return groups.mapNotNull { (v, members) -> row(v, members) } + group(skipped, rest, parentExcluded)
         }
 
-        /** One row per path segment at [depth]; items whose path ends here sit in the row above. */
+        /**
+         * One row per path segment at [depth], keyed by [keyPrefix] and the path down to it; items whose path ends here
+         * sit in the row above.
+         */
         private fun nested(
-            items: List<Item>, depth: Int, rest: List<GroupLevel>, parentExcluded: Boolean, kind: GroupKind, separator: String,
-            segments: (Item) -> List<String>?, key: (Item, Int) -> String,
-        ): List<ViewNode> =
-            split(items, rest, parentExcluded, { item -> if ((segments(item)?.size ?: 0) > depth) key(item, depth + 1) else null }) { k, members ->
-                row(k, segments(members.first())!![depth], kind, members, parentExcluded) { excluded ->
-                    nested(members, depth + 1, rest, excluded, kind, separator, segments, key)
+            items: List<Item>, depth: Int, rest: List<GroupLevel>, parentExcluded: Boolean, kind: GroupKind, keyPrefix: String,
+            separator: String, segments: (Item) -> List<String>?,
+        ): List<ViewNode> {
+            val path = { item: Item -> segments(item)?.takeIf { it.size > depth }?.subList(0, depth + 1)?.joinToString(separator) }
+            return split(items, rest, parentExcluded, path) { p, members ->
+                row(keyPrefix + p, segments(members.first())!![depth], kind, members, parentExcluded) { excluded ->
+                    nested(members, depth + 1, rest, excluded, kind, keyPrefix, separator, segments)
                 }?.let { collapse(it, separator) }
             }
+        }
 
         /** Class rows at nesting [depth]: outer classes at 0, the classes nested in them below. Never collapsed. */
         private fun classes(items: List<Item>, depth: Int, rest: List<GroupLevel>, parentExcluded: Boolean): List<ViewNode> {

@@ -99,8 +99,19 @@ class GroupingTreeTest {
 
         assertEquals(listOf("OtherTests", "Pricing"), labels(project.children), "classes in the project's namespace sit directly under it")
         assertEquals(GroupKind.CLASS, project.children.group("OtherTests").kind)
-        assertEquals("ns:Shop.Unit.Pricing", project.children.group("Pricing").key)
+        assertEquals("ns:Pricing", project.children.group("Pricing").key)
         assertEquals(listOf("CalcTests", "TaxTests"), labels(project.children.group("Pricing").children))
+    }
+
+    @Test
+    fun relative_and_absolute_namespaces_merge_under_their_project() {
+        val shop = "src/Shop/Shop.csproj"
+        val project = rows(listOf(t("Shop.X.A", "One", null, project = shop), t("X.B", "Two", null, project = shop)), PROJECT, NAMESPACE, CLASS)
+            .single() as GroupView
+        val x = project.children.single() as GroupView
+        assertEquals("X", x.label, "one row, as today's namespaces view")
+        assertEquals("ns:X", x.key)
+        assertEquals(listOf("A", "B"), labels(x.children))
     }
 
     @Test
@@ -185,7 +196,7 @@ class GroupingTreeTest {
             .let { ((it.single() as GroupView).children.single() as GroupView).children.single() as GroupView }
         assertEquals("Outer", outer.label)
         assertEquals("class:$unit|Ns.Outer", outer.key)
-        assertEquals(listOf("Inner", "Own"), labels(outer.children), "nested class rows before the class's own tests")
+        assertEquals(listOf("Own", "Inner"), labels(outer.children), "the class's own tests before its nested class rows")
         val inner = outer.children.group("Inner")
         assertEquals(GroupKind.CLASS, inner.kind)
         assertEquals("class:$unit|Ns.Outer+Inner", inner.key)
