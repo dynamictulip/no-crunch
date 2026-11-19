@@ -21,7 +21,9 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        local(providers.environmentVariable("RIDER_PATH").orElse(System.getProperty("user.home") + "/Applications/Rider.app"))
+        // Build against the installed Rider; where there isn't one (CI), download the pinned `riderVersion`.
+        val riderPath = providers.environmentVariable("RIDER_PATH").orElse(System.getProperty("user.home") + "/Applications/Rider.app").get()
+        if (file(riderPath).exists()) local(riderPath) else rider(providers.gradleProperty("riderVersion"))
         // Rider's .NET run configurations implement an interface from this module (used to debug a test by name).
         bundledModule("intellij.rider.debugger.shared")
         testFramework(TestFrameworkType.Platform)

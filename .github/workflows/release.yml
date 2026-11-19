@@ -1,0 +1,76 @@
+name: Release
+
+# Releasing = publishing a GitHub Release with a tag like v0.3.0. This then:
+#   1. moves CHANGELOG.md's Unreleased notes under "## [0.3.0] - <date>" and starts a fresh Unreleased section,
+#   2. sets pluginVersion in plugin/gradle.properties to 0.3.0,
+#   3. commits that to main and moves the tag onto the commit, so the tagged code carries the release's version,
+#   4. replaces the release notes with that changelog section followed by GitHub's generated notes
+#      (Renovate's dependency updates in their own section, see .github/release.yml).
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      BRANCH: ${{ github.event.repository.default_branch }}
+      GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          # Pushing to a protected main needs a token allowed to bypass its rules (see CONTRIBUTING.md).
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Work out the version
+        run: |
+          version="${TAG#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag '$TAG' isn't a version like v1.2.3."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Update CHANGELOG.md and pluginVersion
+        run: |
+          if grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "CHANGELOG.md already has $VERSION (re-run?); leaving it."
+          else
+            today=$(date -u +%Y-%m-%d)
+            # Unreleased keeps its heading, now empty; its notes move under the new version.
+            perl -0pi -e "s/^## \[Unreleased\]\n/## [Unreleased]\n\n## [$VERSION] - $today\n/m" CHANGELOG.md
+            grep -q "^## \[$VERSION\] - $today" CHANGELOG.md || { echo "::error::No '## [Unreleased]' heading in CHANGELOG.md."; exit 1; }
+          fi
+          sed -i -E "s/^pluginVersion=.*/pluginVersion=$VERSION/" plugin/gradle.properties
+
+      - name: Commit to main and move the tag onto it
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git commit -am "chore: release $VERSION"
+            git push origin "HEAD:$BRANCH"
+          fi
+          git tag -f "$TAG"
+          git push -f origin "refs/tags/$TAG"
+
+      - name: Write the release notes
+        run: |
+          # This version's section of the changelog, without its heading.
+          awk -v v="$VERSION" '
+            /^## \[/ { if (found) exit; found = index($0, "## [" v "]") == 1; next }
+            found
+          ' CHANGELOG.md > notes.md
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" -f target_commitish="$BRANCH" \
+            --jq .body >> notes.md
+          gh release edit "$TAG" --notes-file notes.md

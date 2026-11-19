@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "ignorePresets": ["group:monorepos", "group:recommended"],
+  "labels": ["dependencies"],
+  "minimumReleaseAge": "7 days",
+  "packageRules": [
+    {
+      "description": "Minor and patch updates merge themselves once CI passes",
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Rider the plugin builds against in CI",
+      "customType": "regex",
+      "managerFilePatterns": ["/^plugin/gradle\\.properties$/"],
+      "matchStrings": ["riderVersion=(?<currentValue>\\S+)"],
+      "depNameTemplate": "com.jetbrains.intellij.rider:riderRD",
+      "datasourceTemplate": "maven",
+      "registryUrlTemplate": "https://www.jetbrains.com/intellij-repository/releases"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+name: PR
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: Engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Test
+        run: dotnet test --solution NoCrunch.slnx
+
+  plugin:
+    name: Plugin tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The plugin build publishes the engine into the plugin, so it needs .NET too.
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v4
+      # No Rider is installed here, so the build downloads the one pinned in plugin/gradle.properties.
+      - name: Test and build
+        working-directory: plugin
+        run: ./gradlew test buildPlugin
+
+  changelog:
+    name: Changelog updated
+    runs-on: ubuntu-latest
+    # Dependency updates are listed in the release notes from their PRs instead.
+    if: github.event.pull_request.user.login != 'renovate[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check CHANGELOG.md was changed
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only "$BASE"...HEAD | grep -qx CHANGELOG.md; then
+            echo "CHANGELOG.md updated."
+          else
+            echo "::error file=CHANGELOG.md::Add a line under '## [Unreleased]' in CHANGELOG.md describing this change."
+            exit 1
+          fi
