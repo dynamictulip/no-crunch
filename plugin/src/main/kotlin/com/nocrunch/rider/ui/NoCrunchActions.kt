@@ -25,8 +25,8 @@ import com.nocrunch.rider.settings.NoCrunchConfigurable
 import com.nocrunch.rider.settings.NoCrunchSettings
 import com.nocrunch.rider.view.NameColouring
 import com.nocrunch.rider.view.SortMode
-import com.nocrunch.rider.view.ViewMode
 import javax.swing.Icon
+import javax.swing.JComponent
 import javax.swing.SwingConstants
 import javax.swing.tree.TreePath
 
@@ -165,16 +165,15 @@ internal class NoCrunchActions(
             add(toggle("Show Failures Only", { host.failuresOnly }) { host.failuresOnly = it; host.redraw() })
             add(toggle("Hide Excluded Tests", { settings.state.hideExcluded }) { settings.state.hideExcluded = it; host.redraw() })
         })
-        add(DefaultActionGroup("View As", true).apply {
-            templatePresentation.icon = AllIcons.Actions.GroupBy
-            addSeparator("Group By")
-            ViewMode.entries.forEach { mode ->
-                add(choice(mode.title, { ViewMode.fromSetting(settings.state.viewMode) == mode }) {
-                    settings.state.viewMode = mode.name
-                    host.redraw()
-                })
+        add(object : AnAction("Group By", "Choose how the tests are grouped", AllIcons.Actions.GroupBy) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun actionPerformed(e: AnActionEvent) {
+                val anchor = e.inputEvent?.component as? JComponent ?: tree
+                GroupByPopup(settings) { host.redraw() }.showUnder(anchor)
             }
-            addSeparator("Colour Test Names")
+        })
+        add(DefaultActionGroup("Colour Test Names", true).apply {
+            templatePresentation.icon = AllIcons.Actions.Colors
             NameColouring.entries.forEach { mode ->
                 add(choice(mode.title, { NameColouring.fromSetting(settings.state.nameColouring) == mode }) {
                     settings.state.nameColouring = mode.name
