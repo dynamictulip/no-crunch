@@ -26,4 +26,12 @@ public class ListedRowTheories
     [MemberData(nameof(Skus))]
     public void Sku_parser_accepts_only_well_formed_skus(string sku, bool valid) =>
         Assert.Equal(valid, SkuParser.TryParse(sku, out _, out _));
+
+    // xUnit cuts argument values in display names to 50 characters plus "···", so these two rows get the same
+    // display name. No Crunch must still keep them apart.
+    [Theory]
+    [InlineData("catalogue.imports.supplier_feeds.warehouse_north_0001_en")]
+    [InlineData("catalogue.imports.supplier_feeds.warehouse_north_0002_en")]
+    public void Rows_whose_long_arguments_look_the_same(string feed) =>
+        Assert.StartsWith("catalogue.imports.", feed);
 }
