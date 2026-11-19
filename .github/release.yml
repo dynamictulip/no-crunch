@@ -1,0 +1,9 @@
+# Categories for GitHub's generated release notes. Renovate labels its PRs "dependencies" (see renovate.json).
+changelog:
+  categories:
+    - title: Changes
+      labels: ["*"]
+      exclude:
+        labels: [dependencies]
+    - title: Dependency updates
+      labels: [dependencies]
