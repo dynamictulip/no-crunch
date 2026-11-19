@@ -7,7 +7,7 @@ import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestState
 import com.nocrunch.rider.exclusions.TestExclusions
 
-enum class GroupKind { NAMESPACE, FOLDER, FILE }
+enum class GroupKind { PROJECT, FOLDER, FILE, NAMESPACE, CLASS }
 
 /**
  * A row below a project. Aggregates (counts, run time, freshness) are worked out from the tests underneath once, when
@@ -53,17 +53,31 @@ data class ClassView(val node: ClassNode, override val label: String, val sort: 
     override val parentExcluded get() = node.parentExcluded
 }
 
+/**
+ * One row for any grouping level. [key] identifies the row across rebuilds (expansion state); [wholeRule] is the class
+ * or project rule when the row holds everything in that class or project, so ticking it writes one rule, not one per test.
+ */
 data class GroupView(
+    val key: String,
     override val label: String,
     val kind: GroupKind,
     val children: List<ViewNode>,
     override val parentExcluded: Boolean,
+    /** Set on PROJECT rows only, for the renderer's build status. */
+    val project: ProjectNode? = null,
+    val wholeRule: ExclusionRuleDto? = null,
 ) : ViewNode {
     override val locked get() = false
     override val leaves = children.flatMap { it.leaves }
     override val totals = Totals.of(leaves)
-    override val rules get() = children.flatMap { it.rules }.distinct()
-    override val excluded = children.isNotEmpty() && children.all { it.excluded }
+    override val rules: List<ExclusionRuleDto> get() {
+        // The whole rule already covers this row's own tests, but a nested class keeps its own rule.
+        val covered = if (wholeRule != null) children.filterNot { it is TestView } else children
+        return (listOfNotNull(wholeRule) + covered.flatMap { it.rules }).distinct()
+    }
+    override val excluded = leaves.isNotEmpty() && leaves.all { it.excluded }
+    val excludedCount = leaves.count { it.excluded }
+    val partlyExcluded = excludedCount > 0 && !excluded
 }
 
 object TreeView {
@@ -161,7 +175,7 @@ object TreeView {
         val (withNs, without) = project.children.partition { it.type.contains('.') && it.type != TestTreeModel.UNKNOWN_CLASS }
         val byNs = withNs.groupBy { relative(it.type.substringBeforeLast('.')) }
         val groups = byNs.filterKeys { it.isNotEmpty() }.toSortedMap().map { (ns, classes) ->
-            GroupView(ns, GroupKind.NAMESPACE, classes.map { ClassView(it, it.type.substringAfterLast('.')) }, project.excluded)
+            GroupView("namespace:$ns", ns, GroupKind.NAMESPACE, classes.map { ClassView(it, it.type.substringAfterLast('.')) }, project.excluded)
         }
         val atRoot = byNs[""].orEmpty().map { ClassView(it, it.type.substringAfterLast('.')) }
         return groups + atRoot + without.map { ClassView(it, it.type) }
@@ -175,16 +189,16 @@ object TreeView {
         val withFile = byRelative.filterKeys { it != null }.mapKeys { it.key!! }
 
         fun fileGroup(rel: String, members: List<TestNode>) = GroupView(
-            rel.substringAfterLast('/'), GroupKind.FILE,
+            "file:$rel", rel.substringAfterLast('/'), GroupKind.FILE,
             members.sortedWith(compareBy({ it.dto.method ?: it.dto.displayName }, { it.dto.displayName })).map(::TestView),
             project.excluded,
         )
 
         val folders = withFile.keys.filter { it.contains('/') }.groupBy { it.substringBeforeLast('/') }.toSortedMap().map { (dir, files) ->
-            GroupView(dir, GroupKind.FOLDER, files.sorted().map { fileGroup(it, withFile.getValue(it)) }, project.excluded)
+            GroupView("folder:$dir", dir, GroupKind.FOLDER, files.sorted().map { fileGroup(it, withFile.getValue(it)) }, project.excluded)
         }
         val rootFiles = withFile.keys.filterNot { it.contains('/') }.sorted().map { fileGroup(it, withFile.getValue(it)) }
-        val unknown = if (noFile.isEmpty()) emptyList() else listOf(GroupView(NO_FILE, GroupKind.FILE, noFile.map(::TestView), project.excluded))
+        val unknown = if (noFile.isEmpty()) emptyList() else listOf(GroupView("file:$NO_FILE", NO_FILE, GroupKind.FILE, noFile.map(::TestView), project.excluded))
         return folders + rootFiles + unknown
     }
 
