@@ -20,7 +20,14 @@ enum class KindIcon { PROJECT, NAMESPACE, FOLDER, FILE, TEST_SET, TEST }
  * A row's icon: a status, a kind, or the status followed by the kind. [faded]: the status is an outcome from an earlier
  * run (stale, queued or running again). [fileName] picks the file-type icon for [KindIcon.FILE].
  */
-data class RowIcon(val status: StatusIcon?, val kind: KindIcon?, val faded: Boolean = false, val fileName: String? = null)
+data class RowIcon(
+    val status: StatusIcon?, val kind: KindIcon?, val faded: Boolean = false, val fileName: String? = null,
+    /** Some tests below are excluded, some not: the status stays the group's result and the renderer adds a small excluded badge. */
+    val partlyExcluded: Boolean = false,
+)
+
+/** A row's checkbox: [PARTIAL] when only some of the tests below are excluded. */
+enum class CheckState { CHECKED, UNCHECKED, PARTIAL }
 
 /** How a row's name is drawn. The name styles ([PROJECT], [PARENT], [TEST], [ARGS]) are colour-coded when that's on. */
 enum class NameStyle {
@@ -56,44 +63,84 @@ object RowPresentation {
     fun of(o: Any?, editing: Boolean, anyFailures: Boolean): RowLook? = when (o) {
         is BuildErrorsGroup -> RowLook(RowIcon(StatusIcon.ERROR, null), "Build errors", NameStyle.FAILED_BOLD,
             listOf(Segment("  ${o.count}", StatStyle.GREY)))
-        is ProjectNode -> project(o, anyFailures)
+        is ProblemsGroup -> RowLook(RowIcon(StatusIcon.ERROR, null), o.title, NameStyle.FAILED_BOLD,
+            listOf(Segment("  ${o.count}", StatStyle.GREY)))
+        is ProjectNode -> project(o, o.totals, o.excluded, 0, anyFailures)
+        is GroupView -> if (o.kind == GroupKind.PROJECT && o.project != null) projectGroup(o, o.project, anyFailures) else view(o, editing, anyFailures)
         is ViewNode -> view(o, editing, anyFailures)
         is TestNode -> test(o, editing, anyFailures)
         else -> null
     }
 
-    /** Build-error rows have nothing to include or exclude; theory rows follow their theory. */
-    fun checkboxVisible(o: Any?, editing: Boolean): Boolean =
-        editing && o !is BuildErrorsGroup && (o as? ProjectNode)?.isTestProject != false && (o as? TestNode)?.isRow != true
+    /** Build-error and problem rows have nothing to include or exclude; theory rows follow their theory. */
+    fun checkboxVisible(o: Any?, editing: Boolean): Boolean = editing && hasCheckbox(o)
 
-    private fun project(o: ProjectNode, anyFailures: Boolean): RowLook {
+    /** How the row's checkbox is drawn; null for rows without one. */
+    fun checkState(o: Any?): CheckState? {
+        if (!hasCheckbox(o)) return null
+        return when {
+            o is GroupView && o.partlyExcluded -> CheckState.PARTIAL
+            isExcluded(o) -> CheckState.UNCHECKED
+            else -> CheckState.CHECKED
+        }
+    }
+
+    private fun hasCheckbox(o: Any?): Boolean =
+        when (o) {
+            is ProjectNode -> o.isTestProject
+            is TestNode -> !o.isRow
+            is ViewNode -> true
+            else -> false
+        }
+
+    private fun isExcluded(o: Any?): Boolean = when (o) {
+        is ProjectNode -> o.excluded
+        is GroupView -> groupExcluded(o)
+        is ViewNode -> o.excluded
+        is TestNode -> o.excluded
+        else -> false
+    }
+
+    /** A project row with no tests (it never built) has no leaves to be excluded, so its own rule decides. */
+    private fun groupExcluded(o: GroupView): Boolean = if (o.leaves.isEmpty()) o.project?.excluded == true else o.excluded
+
+    private fun projectGroup(o: GroupView, project: ProjectNode, anyFailures: Boolean): RowLook =
+        project(project, o.totals, groupExcluded(o), o.excludedCount.takeIf { o.partlyExcluded } ?: 0, anyFailures, o.label)
+
+    /**
+     * A project's status row. [excluded] and [partlyExcluded] (the number of excluded tests, 0 when not partly) come from
+     * the row itself, as a project row below a namespace may hold only part of the project.
+     */
+    private fun project(o: ProjectNode, totals: Totals, excluded: Boolean, partlyExcluded: Int, anyFailures: Boolean, name: String = o.name): RowLook {
+        val fresh = totals.freshness == null
         val icon = when (o.buildStatus) {
             BuildStatus.FAILED -> RowIcon(StatusIcon.ERROR, KindIcon.PROJECT)
             BuildStatus.BLOCKED -> RowIcon(StatusIcon.WARNING, KindIcon.PROJECT)
             BuildStatus.BUILDING -> RowIcon(StatusIcon.IN_PROGRESS, KindIcon.PROJECT)
-            else -> if (o.excluded) RowIcon(StatusIcon.EXCLUDED, KindIcon.PROJECT) else outcome(o.shownOutcome, o.isFresh, KindIcon.PROJECT)
-        }
+            else -> if (excluded) RowIcon(StatusIcon.EXCLUDED, KindIcon.PROJECT) else outcome(totals.shownOutcome, fresh, KindIcon.PROJECT)
+        }.copy(partlyExcluded = partlyExcluded > 0)
         val style = when {
-            o.excluded -> NameStyle.GREY
-            o.shownOutcome == TestState.FAILED -> if (o.isFresh) NameStyle.FAILED_BOLD else NameStyle.STALE_FAILED_BOLD
+            excluded -> NameStyle.GREY
+            totals.shownOutcome == TestState.FAILED -> if (fresh) NameStyle.FAILED_BOLD else NameStyle.STALE_FAILED_BOLD
             else -> NameStyle.PROJECT
         }
         val stats = mutableListOf<Segment>()
         if (o.isTestProject) {
-            stats += counts(o.counts, o.excluded, anyFailures)
-            stats += duration(o.durationMs)
-            stats += freshness(o.freshness)
-            stats += manual(o.manualCount)
+            stats += counts(totals.counts, excluded, anyFailures)
+            stats += duration(totals.durationMs)
+            stats += freshness(totals.freshness)
+            stats += manual(totals.manualCount)
         }
+        stats += partlyExcludedCount(partlyExcluded)
         when {
-            o.excluded -> stats += Segment("  (excluded)", StatStyle.GREY_ITALIC)
+            excluded -> stats += Segment("  (excluded)", StatStyle.GREY_ITALIC)
             o.buildStatus == BuildStatus.FAILED -> stats += Segment("  build failed", StatStyle.ERROR)
             o.buildStatus == BuildStatus.BLOCKED -> stats += Segment("  blocked by ${o.blockedByName ?: "build failure"}", StatStyle.GREY_ITALIC)
             o.run?.status == RunStatus.UNSUPPORTED_NOT_MTP -> stats += Segment("  unsupported (VSTest)", StatStyle.GREY_ITALIC)
             o.run?.status == RunStatus.UNSUPPORTED_MTP_VERSION -> stats += Segment("  unsupported MTP version", StatStyle.GREY_ITALIC)
             o.run?.status == RunStatus.CRASHED -> stats += Segment("  test host crashed", StatStyle.ERROR)
         }
-        return RowLook(icon, o.name, style, stats)
+        return RowLook(icon, name, style, stats)
     }
 
     /** Grouping rows and classes show their status beside what they are. */
@@ -101,18 +148,20 @@ object RowPresentation {
         val kind = when {
             o is GroupView && o.kind == GroupKind.NAMESPACE -> KindIcon.NAMESPACE
             o is GroupView && o.kind == GroupKind.FOLDER -> KindIcon.FOLDER
-            o is GroupView -> KindIcon.FILE
+            o is GroupView && o.kind == GroupKind.FILE -> KindIcon.FILE
+            o is GroupView && o.kind == GroupKind.PROJECT -> KindIcon.PROJECT
             else -> KindIcon.TEST_SET
         }
+        val partly = (o as? GroupView)?.takeIf { it.partlyExcluded }?.excludedCount ?: 0
         val icon = (if (o.excluded) RowIcon(StatusIcon.EXCLUDED, kind) else outcome(o.shownOutcome, o.isFresh, kind))
-            .copy(fileName = if (kind == KindIcon.FILE) o.label else null)
+            .copy(fileName = if (kind == KindIcon.FILE) o.label else null, partlyExcluded = partly > 0)
         val style = when {
             // Excluded rows are grey unless they hold a current manual result.
             o.excluded && o.leaves.none { it.manual && it.freshness == null } -> NameStyle.GREY
             o.shownOutcome == TestState.FAILED -> if (o.isFresh) NameStyle.FAILED else NameStyle.STALE_FAILED
             else -> NameStyle.PARENT
         }
-        val stats = counts(o.counts, o.excluded, anyFailures) + duration(o.durationMs) + freshness(o.freshness) + manual(o.manualCount)
+        val stats = counts(o.counts, o.excluded, anyFailures) + duration(o.durationMs) + freshness(o.freshness) + manual(o.manualCount) + partlyExcludedCount(partly)
         // Without checkboxes, say which rows are left out of automatic runs.
         val note = if (o.excluded && !o.parentExcluded && !editing) listOf(Segment("  (excluded)", StatStyle.GREY_ITALIC)) else emptyList()
         return RowLook(icon, o.label, style, stats + note)
@@ -180,6 +229,8 @@ object RowPresentation {
             Segment("  ○ ${c.pending}", StatStyle.GREY),
         )
     }
+
+    private fun partlyExcludedCount(n: Int): List<Segment> = if (n > 0) listOf(Segment("  · $n excluded", StatStyle.GREY_ITALIC)) else emptyList()
 
     private fun duration(ms: Double?): List<Segment> =
         if (ms == null) emptyList() else listOf(Segment("  ${TestTreeModel.formatDuration(ms)}", StatStyle.GREY))

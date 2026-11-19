@@ -11,6 +11,7 @@ import com.nocrunch.rider.engine.TestState
 import com.nocrunch.rider.view.ViewMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -235,5 +236,96 @@ class RowPresentationTest {
         assertFalse(RowPresentation.checkboxVisible(BuildErrorsGroup(1), editing = true))
         assertFalse(RowPresentation.checkboxVisible(nonTestProject, editing = true))
         assertTrue(RowPresentation.checkboxVisible(model(t("Adds", TestState.PASSED)).single(), editing = true))
+    }
+
+    private fun tests(n: Int) = (1..n).map { t("M$it", TestState.PASSED) }
+
+    /** A class row holding every test of the fixture class, as the grouping tree builds it. */
+    private fun classGroup(project: ProjectNode, wholeRule: ExclusionRuleDto? = null): GroupView {
+        val cls = project.children.single()
+        return GroupView("c", "Calc", GroupKind.CLASS, cls.children.map(::TestView), false, wholeRule = wholeRule)
+    }
+
+    @Test
+    fun partly_excluded_group_shows_count_and_badge() {
+        val rules = (1..12).map { ExclusionRuleDto(unit, "Shop.Unit.Calc", "M$it") }
+        val g = classGroup(model(*tests(73).toTypedArray(), rules = rules).single())
+        assertTrue(g.partlyExcluded)
+        val l = look(g)
+        assertEquals(Segment("  · 12 excluded", StatStyle.GREY_ITALIC), l.stats.last())
+        assertTrue(l.icon.partlyExcluded)
+        assertEquals(StatusIcon.PASSED, l.icon.status, "the badge sits on the group's result, not on an excluded icon")
+        assertEquals(KindIcon.TEST_SET, l.icon.kind)
+        assertEquals(NameStyle.PARENT, l.nameStyle)
+    }
+
+    @Test
+    fun a_class_excluded_by_its_rule_except_one_reincluded_test_shows_the_partial_markers() {
+        val rules = listOf(ExclusionRuleDto(unit, "Shop.Unit.Calc"), ExclusionRuleDto(unit, "Shop.Unit.Calc", "M2", include = true))
+        val g = classGroup(model(*tests(3).toTypedArray(), rules = rules).single(), wholeRule = rules[0])
+        val l = look(g)
+        assertEquals(Segment("  · 2 excluded", StatStyle.GREY_ITALIC), l.stats.last())
+        assertTrue(l.icon.partlyExcluded)
+        assertNotEquals(StatusIcon.EXCLUDED, l.icon.status)
+    }
+
+    @Test
+    fun wholly_excluded_group_looks_as_today() {
+        val rules = listOf(ExclusionRuleDto(unit, "Shop.Unit.Calc"))
+        val l = look(classGroup(model(*tests(3).toTypedArray(), rules = rules).single(), rules[0]))
+        assertEquals(RowIcon(StatusIcon.EXCLUDED, KindIcon.TEST_SET), l.icon)
+        assertEquals(NameStyle.GREY, l.nameStyle)
+        assertEquals(Segment("  (excluded)", StatStyle.GREY_ITALIC), l.stats.last())
+        assertTrue(l.stats.none { it.text.contains("· ") })
+    }
+
+    @Test
+    fun project_group_shows_project_status() {
+        val p = model(t("Adds", TestState.PASSED), runs = mapOf(unit to RunFinishedDto(unit, RunStatus.CRASHED, null))).single()
+        val g = GroupView("p", p.name, GroupKind.PROJECT, listOf(classGroup(p)), false, project = p)
+        val l = look(g)
+        assertEquals(look(p), l)
+        assertEquals(Segment("  test host crashed", StatStyle.ERROR), l.stats.last())
+        assertEquals(KindIcon.PROJECT, l.icon.kind)
+    }
+
+    @Test
+    fun a_project_group_without_tests_looks_excluded_when_its_project_is() {
+        val p = ProjectNode(unit, "Unit", null, null, null, excluded = true, children = emptyList())
+        val l = look(GroupView("p", "Unit", GroupKind.PROJECT, emptyList(), false, project = p))
+        assertEquals(look(p), l)
+        assertEquals(RowIcon(StatusIcon.EXCLUDED, KindIcon.PROJECT), l.icon)
+    }
+
+    @Test
+    fun a_partly_excluded_project_group_gets_the_badge_before_its_status_note() {
+        val rules = listOf(ExclusionRuleDto(unit, "Shop.Unit.Calc", "M1"))
+        val p = model(*tests(2).toTypedArray(), rules = rules, runs = mapOf(unit to RunFinishedDto(unit, RunStatus.CRASHED, null))).single()
+        val l = look(GroupView("p", p.name, GroupKind.PROJECT, listOf(classGroup(p)), false, project = p))
+        assertTrue(l.icon.partlyExcluded)
+        assertEquals(listOf(Segment("  · 1 excluded", StatStyle.GREY_ITALIC), Segment("  test host crashed", StatStyle.ERROR)), l.stats.takeLast(2))
+    }
+
+    @Test
+    fun problems_group_row() {
+        val l = look(ProblemsGroup("Projects with problems", 2))
+        assertEquals("Projects with problems", l.name)
+        assertEquals(RowIcon(StatusIcon.ERROR, kind = null), l.icon)
+        assertEquals("  2<GREY>", l.statsText())
+        assertFalse(RowPresentation.checkboxVisible(ProblemsGroup("x", 1), editing = true))
+    }
+
+    @Test
+    fun check_state() {
+        val none = classGroup(model(*tests(3).toTypedArray()).single())
+        val some = classGroup(model(*tests(3).toTypedArray(), rules = listOf(ExclusionRuleDto(unit, "Shop.Unit.Calc", "M1"))).single())
+        val all = classGroup(model(*tests(3).toTypedArray(), rules = listOf(ExclusionRuleDto(unit, "Shop.Unit.Calc"))).single())
+        assertEquals(CheckState.CHECKED, RowPresentation.checkState(none))
+        assertEquals(CheckState.PARTIAL, RowPresentation.checkState(some))
+        assertEquals(CheckState.UNCHECKED, RowPresentation.checkState(all))
+        assertEquals(CheckState.UNCHECKED, RowPresentation.checkState(test(t("Adds", TestState.EXCLUDED, ms = null), rules = listOf(ExclusionRuleDto(unit)))))
+        assertEquals(CheckState.CHECKED, RowPresentation.checkState(test(t("Adds", TestState.PASSED))))
+        assertNull(RowPresentation.checkState(BuildErrorsGroup(1)))
+        assertNull(RowPresentation.checkState("root"))
     }
 }

@@ -8,7 +8,10 @@ import com.intellij.ui.CheckedTreeNode
 import com.intellij.ui.JBColor
 import com.intellij.ui.RowIcon as IdeRowIcon
 import com.intellij.ui.SimpleColoredComponent
+import com.intellij.ui.LayeredIcon
 import com.intellij.ui.SimpleTextAttributes
+import com.intellij.util.IconUtil
+import com.intellij.util.ui.ThreeStateCheckBox
 import com.intellij.util.ui.EmptyIcon
 import com.intellij.util.ui.JBUI
 import com.nocrunch.rider.view.NameColouring
@@ -17,6 +20,7 @@ import java.awt.Color
 import java.awt.Font
 import javax.swing.Icon
 import javax.swing.JTree
+import javax.swing.SwingConstants
 
 /**
  * Draws a row of the test tree from its [RowLook]: icon, name (in the editor font, colour-coded when that's on) and the
@@ -50,7 +54,9 @@ internal class TestTreeRenderer(
         val obj = (value as? CheckedTreeNode)?.userObject
         // The editor's monospace font, so names read like code and data-row columns line up.
         r.font = monospace(tree.font)
-        checkbox.isVisible = RowPresentation.checkboxVisible(obj, editing)
+        threeStateCheckBox.isVisible = RowPresentation.checkboxVisible(obj, editing)
+        // A group with only some tests excluded shows the mixed state, which no node of the tree model can express.
+        if (RowPresentation.checkState(obj) == CheckState.PARTIAL) threeStateCheckBox.state = ThreeStateCheckBox.State.DONT_CARE
         val look = RowPresentation.of(obj, editing, anyFailures()) ?: return
         r.icon = icon(look.icon)
         appendName(look.name, look.nameStyle)
@@ -117,10 +123,16 @@ internal class TestTreeRenderer(
             KindIcon.TEST_SET -> KindIcons.testSet
             KindIcon.TEST -> KindIcons.test
         }
-        return when {
+        val shown = when {
             status == null -> kind
             kind == null -> status
             else -> IdeRowIcon(status, EmptyIcon.create(JBUI.scale(4), 1), kind)
+        }
+        if (!i.partlyExcluded || shown == null) return shown
+        // A small excluded icon on the bottom-right corner of the group's own result.
+        return LayeredIcon(2).apply {
+            setIcon(shown, 0)
+            setIcon(IconUtil.scale(KindIcons.excluded, null, 0.6f), 1, SwingConstants.SOUTH_EAST)
         }
     }
 
