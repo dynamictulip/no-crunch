@@ -7,6 +7,9 @@ import com.nocrunch.rider.engine.TestState
 /** Row object for the pinned section listing non-test projects whose build broke. */
 data class BuildErrorsGroup(val count: Int)
 
+/** Row object for the pinned section of projects with problems ([GroupedTree.problemsTitle] says which kind). */
+data class ProblemsGroup(val title: String, val count: Int)
+
 /** The status half of a row's icon. */
 enum class StatusIcon { PASSED, FAILED, SKIPPED, EXCLUDED, IN_PROGRESS, ERROR, WARNING }
 

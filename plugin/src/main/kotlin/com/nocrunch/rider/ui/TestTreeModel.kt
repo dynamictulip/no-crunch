@@ -194,13 +194,7 @@ object TestTreeModel {
         return projects.mapNotNull { p ->
             val classes = p.children
                 .map { c ->
-                    val kept = c.children
-                        // Same outcome the tree shows, so failures stay listed (muted) while stale, queued or
-                        // running, and a theory stays while any of its rows fails.
-                        // Only failures that count, as the bar counts them: an excluded test's failure from before it
-                        // was excluded is still shown on its row, but isn't a failure to list here.
-                        .filter { !failuresOnly || it.countedFailure || it.rows.any { r -> r.countedFailure } }
-                        .filter { !hideExcluded || !it.excluded }
+                    val kept = c.children.filter { keeps(it, failuresOnly, hideExcluded) }
                     if (kept.size == c.children.size) c else c.copy(children = kept)
                 }
                 .filter { it.children.isNotEmpty() }
@@ -213,6 +207,15 @@ object TestTreeModel {
             }
         }
     }
+
+    /**
+     * Whether the view filters show [test]. Failures are judged by the outcome the tree shows, so they stay listed
+     * (muted) while stale, queued or running, and a theory stays while any of its rows fails. Only failures that
+     * count, as the bar counts them: an excluded test's failure from before it was excluded is still shown on its
+     * row, but isn't a failure to list here.
+     */
+    fun keeps(test: TestNode, failuresOnly: Boolean, hideExcluded: Boolean): Boolean =
+        (!failuresOnly || test.countedFailure || test.rows.any { it.countedFailure }) && (!hideExcluded || !test.excluded)
 
     /** Every project and test, without the view filters. */
     fun buildAll(
