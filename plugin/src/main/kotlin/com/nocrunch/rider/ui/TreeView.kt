@@ -71,8 +71,13 @@ data class GroupView(
     override val leaves = children.flatMap { it.leaves }
     override val totals = Totals.of(leaves)
     override val rules: List<ExclusionRuleDto> get() {
-        // The whole rule already covers this row's own tests, but a nested class keeps its own rule.
-        val covered = if (wholeRule != null) children.filterNot { it is TestView } else children
+        // A whole-project rule covers everything below it. A whole-class rule covers its own tests, but a nested
+        // class keeps its own rule.
+        val covered = when {
+            wholeRule == null -> children
+            kind == GroupKind.PROJECT -> emptyList()
+            else -> children.filter { it is GroupView && it.kind == GroupKind.CLASS }
+        }
         return (listOfNotNull(wholeRule) + covered.flatMap { it.rules }).distinct()
     }
     override val excluded = leaves.isNotEmpty() && leaves.all { it.excluded }

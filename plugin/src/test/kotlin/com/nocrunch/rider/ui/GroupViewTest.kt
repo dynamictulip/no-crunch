@@ -56,4 +56,26 @@ class GroupViewTest {
         assertEquals(Triple(false, true, 1), state(true, false))
         assertEquals(Triple(true, false, 2), state(true, true))
     }
+
+    @Test
+    fun whole_project_row_writes_only_its_project_rule() {
+        val projectRule = ExclusionRuleDto(p)
+        val cls = group(GroupKind.CLASS, listOf(TestView(a)), ExclusionRuleDto(p, "Ns.C"))
+        val ns = group(GroupKind.NAMESPACE, listOf(cls))
+        assertEquals(listOf(projectRule), group(GroupKind.PROJECT, listOf(ns, cls), projectRule).rules)
+    }
+
+    @Test
+    fun partial_project_row_writes_its_childrens_rules() {
+        val cls = group(GroupKind.CLASS, listOf(TestView(a)), ExclusionRuleDto(p, "Ns.C"))
+        val other = group(GroupKind.CLASS, listOf(TestView(node("Ns.D", "Z"))), ExclusionRuleDto(p, "Ns.D"))
+        assertEquals(listOf(ExclusionRuleDto(p, "Ns.C"), ExclusionRuleDto(p, "Ns.D")), group(GroupKind.PROJECT, listOf(cls, other)).rules)
+    }
+
+    @Test
+    fun class_excluded_by_rule_with_a_reincluded_test_is_partly_excluded() {
+        val g = group(GroupKind.CLASS, listOf(TestView(node("Ns.C", "A", true)), TestView(node("Ns.C", "B", false))), ExclusionRuleDto(p, "Ns.C"))
+        assertEquals(false, g.excluded)
+        assertEquals(true, g.partlyExcluded)
+    }
 }
