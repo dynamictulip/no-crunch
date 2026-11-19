@@ -42,7 +42,7 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
 
         try
         {
-            var discovered = await DiscoverAsync(project, ct);
+            var (discovered, renamed) = KeepKeysApart(await DiscoverAsync(project, ct));
             var queued = new List<TestResultUpdate>();
             var initial = new List<TestResultUpdate>();
             foreach (var t in discovered)
@@ -53,7 +53,7 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
             }
             updates.Writer.TryWrite(initial);
 
-            var timedOut = queued.Count > 0 ? await ExecuteAsync(project, queued, updates.Writer, ct) : null;
+            var timedOut = queued.Count > 0 ? await ExecuteAsync(project, queued, renamed, updates.Writer, ct) : null;
             // A timed-out run still ends normally: every test it was asked to run now has a result (the unfinished
             // ones failed), and the error says why the test host was stopped.
             return new ProjectRunOutcome(name, ProjectRunStatus.Completed, timedOut);
@@ -71,6 +71,30 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
             updates.Writer.TryComplete();
             await pump;
         }
+    }
+
+    /// <summary>A discovered test whose key clashed with another's: its original key and the one it uses instead.</summary>
+    internal sealed record Renamed(string OriginalKey, TestId Id);
+
+    /// <summary>
+    /// A data row's key comes from its display name, which isn't always unique: xUnit, for one, cuts argument values to
+    /// 50 characters plus "···", so rows whose arguments share a long prefix look alike. Tests whose keys clash get
+    /// their UID added to the key so each stays its own test; every other key is left as it was, so saved results and
+    /// exclusions keep matching. Returns the tests and, by UID, the renames to apply to results reported during the run.
+    /// </summary>
+    internal static (List<TestResultUpdate> Tests, IReadOnlyDictionary<string, Renamed> Renamed) KeepKeysApart(IReadOnlyList<TestResultUpdate> discovered)
+    {
+        var clashing = discovered.GroupBy(t => t.Id.Key, StringComparer.Ordinal).Where(g => g.Count() > 1)
+            .Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
+        var renamed = new Dictionary<string, Renamed>(StringComparer.Ordinal);
+        var tests = discovered.Select(t =>
+        {
+            if (!clashing.Contains(t.Id.Key)) return t;
+            var id = t.Id with { Variant = t.Id.Variant is { } v ? $"{v} [{t.Id.Uid}]" : $"[{t.Id.Uid}]" };
+            renamed[t.Id.Uid] = new Renamed(t.Id.Key, id);
+            return t with { Id = id };
+        }).ToList();
+        return (tests, renamed);
     }
 
     /// <summary>The outcome of a run that threw <paramref name="ex"/> (other than by being cancelled).</summary>
@@ -112,11 +136,13 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
     /// for the test timeout: then its test host has been stopped and its unfinished tests reported as failed.
     /// </summary>
     private async Task<string?> ExecuteAsync(ProjectInfo project, IReadOnlyList<TestResultUpdate> queued,
-        ChannelWriter<IReadOnlyList<TestResultUpdate>> writer, CancellationToken ct)
+        IReadOnlyDictionary<string, Renamed> renamed, ChannelWriter<IReadOnlyList<TestResultUpdate>> writer, CancellationToken ct)
     {
         var gate = new object();
         var stopped = false;
-        var latest = queued.ToDictionary(q => q.Id.Key, StringComparer.Ordinal);
+        // Keys are unique after KeepKeysApart, but a clash must never crash the run: the later test wins.
+        var latest = new Dictionary<string, TestResultUpdate>(StringComparer.Ordinal);
+        foreach (var q in queued) latest[q.Id.Key] = q;
         var reportedUids = new HashSet<string>(StringComparer.Ordinal);
         using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // (Re)starts the inactivity timer. Only call under gate while not stopped (the source is disposed after that).
@@ -150,6 +176,9 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
                             };
                             if (state is not { } s) continue;
                             var u = ToUpdate(project, change, s);
+                            // A test renamed at discovery reports under its new key. (Rows of a theory share its UID
+                            // but have their own display names, so they don't match the theory's original key.)
+                            if (renamed.TryGetValue(u.Id.Uid, out var r) && u.Id.Key == r.OriginalKey) u = u with { Id = r.Id };
                             latest[u.Id.Key] = u;
                             reportedUids.Add(u.Id.Uid);
                             batch.Add(u);

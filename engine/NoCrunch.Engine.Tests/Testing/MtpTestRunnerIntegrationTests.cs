@@ -71,6 +71,22 @@ public class MtpTestRunnerIntegrationTests
 
     [TestMethod]
     [Timeout(120_000)]
+    public async Task Rows_whose_display_names_are_cut_to_the_same_text_stay_separate_tests()
+    {
+        var (outcome, updates) = await Run(_sample, "Shop.Theory.Tests");
+
+        Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
+        var rows = Final(updates).Values.Where(u => u.Id.Method?.StartsWith("Rows_whose_long_arguments_look_the_same") == true).ToList();
+        Assert.AreEqual(2, rows.Count, "two rows, two tests: " + string.Join(", ", rows.Select(r => r.Id.Key)));
+        Assert.AreEqual(rows[0].DisplayName, rows[1].DisplayName, "xUnit shows them alike (the precondition of this test)");
+        Assert.IsTrue(rows.All(r => r.State == TestState.Passed), string.Join("\n", rows.Select(r => r.Message)));
+
+        var listed = Final(updates).Values.Where(u => u.Id.Method?.StartsWith("Bulk_percent") == true).ToList();
+        Assert.IsTrue(listed.All(r => !r.Id.Key.Contains(r.Id.Uid)), "keys that don't clash are left as they were");
+    }
+
+    [TestMethod]
+    [Timeout(120_000)]
     public async Task ShouldRun_false_reports_excluded_and_does_not_run()
     {
         var (outcome, updates) = await Run(_sample, "Shop.Core.Tests", id => id.Method != "Total_zero_qty");
