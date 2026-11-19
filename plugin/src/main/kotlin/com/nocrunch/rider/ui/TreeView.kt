@@ -1,7 +1,6 @@
 package com.nocrunch.rider.ui
 
 import com.nocrunch.rider.view.SortMode
-import com.nocrunch.rider.view.ViewMode
 import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestState
@@ -43,16 +42,6 @@ data class TestView(val node: TestNode) : ViewNode {
     override val parentExcluded get() = node.parentExcluded
 }
 
-data class ClassView(val node: ClassNode, override val label: String, val sort: SortMode = SortMode.NAME) : ViewNode {
-    val children: List<TestView> by lazy { TreeView.sortTests(node.children.map(::TestView), sort) }
-    override val leaves get() = node.children
-    override val totals get() = node.totals
-    override val rules get() = node.rules
-    override val excluded get() = node.excluded
-    override val locked get() = node.locked
-    override val parentExcluded get() = node.parentExcluded
-}
-
 /**
  * One row for any grouping level. [key] identifies the row across rebuilds (expansion state); [wholeRule] is the class
  * or project rule when the row holds everything in that class or project, so ticking it writes one rule, not one per test.
@@ -88,50 +77,23 @@ data class GroupView(
 object TreeView {
     const val NO_FILE = "(no file)"
 
-    fun of(project: ProjectNode, mode: ViewMode, sort: SortMode = SortMode.NAME): List<ViewNode> {
-        val nodes = when (mode) {
-            ViewMode.CLASSES -> {
-                val prefix = sharedNamespace(project.children.map { it.type })
-                project.children.map { ClassView(it, it.type.removePrefix(prefix)) }
-            }
-            ViewMode.NAMESPACES -> byNamespace(project)
-            ViewMode.FILES -> byFile(project)
-        }
-        return sortViews(nodes, sort)
-    }
-
-    fun sortProjects(projects: List<ProjectNode>, sort: SortMode): List<ProjectNode> {
-        val byTests = comparator<ProjectNode>(sort, { it.name }, { p -> p.children.flatMap { it.children } }, { it.durationMs })
-        // Broken builds outrank any test result: failed builds first, then projects blocked by them.
-        return if (sort == SortMode.STATUS) projects.sortedWith(compareBy<ProjectNode> { buildRank(it.buildStatus) }.then(byTests))
-        else projects.sortedWith(byTests)
-    }
-
-    /** Splits off non-test projects whose build failed: they go in the pinned "Build errors" section, not among test projects. */
-    fun splitBuildErrors(projects: List<ProjectNode>): Pair<List<ProjectNode>, List<ProjectNode>> =
-        projects.partition { !it.isTestProject && it.buildStatus?.isBroken == true }
-
     internal fun buildRank(status: BuildStatus?): Int = when (status) {
         BuildStatus.FAILED -> 0
         BuildStatus.BLOCKED -> 1
         else -> 2
     }
 
-    fun sortTests(tests: List<TestView>, sort: SortMode): List<TestView> =
-        tests.sortedWith(comparator(sort, { it.label }, { it.leaves }, { it.node.countedDurationMs }))
-
     /** Sorts rows, and recursively the rows inside groups and classes. */
     internal fun sortViews(nodes: List<ViewNode>, sort: SortMode, parent: GroupKind? = null): List<ViewNode> =
         nodes.map {
             when (it) {
                 is GroupView -> it.copy(children = sortViews(it.children, sort, it.kind))
-                is ClassView -> it.copy(sort = sort)
                 is TestView -> it
             }
         }.sortedWith(
             // Like a file explorer, name order keeps folders first, and "(no file)" and tests that skip a level last;
             // but a class's own tests come before the classes nested in it, as in the source.
-            // Broken builds outrank any test result, as in sortProjects.
+            // Broken builds outrank any test result.
             when (sort) {
                 SortMode.NAME -> compareBy<ViewNode> { kindRank(it, parent) }.then(comparator(sort, { it.label }, { it.leaves }, { it.durationMs }))
                 SortMode.STATUS -> compareBy<ViewNode> { buildRank((it as? GroupView)?.project?.buildStatus) }
@@ -175,44 +137,6 @@ object TreeView {
         if (namespaces.isEmpty() || namespaces.size < types.size) return ""
         val common = namespaces.reduce { acc, ns -> acc.zip(ns).takeWhile { (a, b) -> a == b }.map { it.first } }
         return if (common.isEmpty()) "" else common.joinToString(".") + "."
-    }
-
-    /**
-     * Namespaces are shown relative to the project's own (assumed to match the project name, as it does by default):
-     * classes in it sit directly under the project, and `Shop.Tests.Pricing` shows as `Pricing`. Other namespaces keep
-     * their full name.
-     */
-    private fun byNamespace(project: ProjectNode): List<ViewNode> {
-        val root = project.name
-        fun relative(ns: String) = if (ns == root) "" else ns.removePrefix("$root.")
-        val (withNs, without) = project.children.partition { it.type.contains('.') && it.type != TestTreeModel.UNKNOWN_CLASS }
-        val byNs = withNs.groupBy { relative(it.type.substringBeforeLast('.')) }
-        val groups = byNs.filterKeys { it.isNotEmpty() }.toSortedMap().map { (ns, classes) ->
-            GroupView("namespace:$ns", ns, GroupKind.NAMESPACE, classes.map { ClassView(it, it.type.substringAfterLast('.')) }, project.excluded)
-        }
-        val atRoot = byNs[""].orEmpty().map { ClassView(it, it.type.substringAfterLast('.')) }
-        return groups + atRoot + without.map { ClassView(it, it.type) }
-    }
-
-    private fun byFile(project: ProjectNode): List<ViewNode> {
-        val projectDir = project.path.substringBeforeLast('/', "")
-        val tests = project.children.flatMap { it.children }
-        val byRelative = tests.groupBy { t -> t.dto.filePath?.let { relativeTo(it, projectDir) } }
-        val noFile = byRelative[null].orEmpty()
-        val withFile = byRelative.filterKeys { it != null }.mapKeys { it.key!! }
-
-        fun fileGroup(rel: String, members: List<TestNode>) = GroupView(
-            "file:$rel", rel.substringAfterLast('/'), GroupKind.FILE,
-            members.sortedWith(compareBy({ it.dto.method ?: it.dto.displayName }, { it.dto.displayName })).map(::TestView),
-            project.excluded,
-        )
-
-        val folders = withFile.keys.filter { it.contains('/') }.groupBy { it.substringBeforeLast('/') }.toSortedMap().map { (dir, files) ->
-            GroupView("folder:$dir", dir, GroupKind.FOLDER, files.sorted().map { fileGroup(it, withFile.getValue(it)) }, project.excluded)
-        }
-        val rootFiles = withFile.keys.filterNot { it.contains('/') }.sorted().map { fileGroup(it, withFile.getValue(it)) }
-        val unknown = if (noFile.isEmpty()) emptyList() else listOf(GroupView("file:$NO_FILE", NO_FILE, GroupKind.FILE, noFile.map(::TestView), project.excluded))
-        return folders + rootFiles + unknown
     }
 
     /** Path of [file] inside the project's folder, or just the file name if it lives elsewhere. */

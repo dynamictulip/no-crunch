@@ -1,9 +1,8 @@
 package com.nocrunch.rider.ui
 
 import com.nocrunch.rider.view.SortMode
-import com.nocrunch.rider.view.ViewMode
-import com.nocrunch.rider.ProjectBuild
-import com.nocrunch.rider.engine.BuildStatus
+import com.nocrunch.rider.view.GroupLevel
+import com.nocrunch.rider.view.Grouping
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.TestResultDto
 import com.nocrunch.rider.engine.TestState
@@ -32,40 +31,31 @@ class SortTest {
 
     private val rules = listOf(ExclusionRuleDto(a, "N.Zeta", "Excluded"))
     private fun projects() = TestTreeModel.build(tests, emptyMap(), rules, false)
+    private fun rows(sort: SortMode, vararg levels: GroupLevel) =
+        GroupingTree.build(projects(), Grouping(levels.toList()), sort).rows
+    private fun classLabels(sort: SortMode) =
+        (rows(sort, GroupLevel.PROJECT, GroupLevel.CLASS).first { it.label == "A" } as GroupView).children.map { it.label }
     private fun testOrder(sort: SortMode) =
-        (TreeView.of(projects().single { it.path == a }, ViewMode.CLASSES, sort).single { it.label == "Zeta" } as ClassView)
-            .let { TreeView.sortTests(it.children, sort) }.map { it.node.dto.method }
+        ((rows(sort, GroupLevel.PROJECT, GroupLevel.CLASS).first { it.label == "A" } as GroupView).children
+            .single { it.label == "Zeta" } as GroupView).children.map { (it as TestView).node.dto.method }
 
     @Test
     fun name_sort_is_alphabetical_ignoring_case() {
-        assertEquals(listOf("alpha", "Zeta"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.NAME).map { it.label })
+        assertEquals(listOf("alpha", "Zeta"), classLabels(SortMode.NAME))
         assertEquals(listOf("Excluded", "fail", "pass_fast", "queued", "stale_pass"), testOrder(SortMode.NAME))
     }
 
     @Test
     fun status_sort_puts_problems_first() {
         assertEquals(listOf("fail", "queued", "stale_pass", "pass_fast", "Excluded"), testOrder(SortMode.STATUS))
-        assertEquals(listOf("Zeta", "alpha"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.STATUS).map { it.label })
-        assertEquals(listOf(a, b), TreeView.sortProjects(projects(), SortMode.STATUS).map { it.path })
-    }
-
-    @Test
-    fun status_sort_puts_build_failures_above_test_failures() {
-        val broken = "src/Broken/Broken.csproj"
-        val blocked = "tests/Blocked/Blocked.csproj"
-        val builds = mapOf(
-            broken to ProjectBuild(broken, BuildStatus.FAILED, "error CS1002", null),
-            blocked to ProjectBuild(blocked, BuildStatus.BLOCKED, "", broken),
-            b to ProjectBuild(b, BuildStatus.SUCCEEDED, "", null),
-        )
-        val withBuilds = TestTreeModel.build(tests, builds, rules, false)
-        assertEquals(listOf(broken, blocked, a, b), TreeView.sortProjects(withBuilds, SortMode.STATUS).map { it.path })
+        assertEquals(listOf("Zeta", "alpha"), classLabels(SortMode.STATUS))
+        assertEquals(listOf("A", "B"), rows(SortMode.STATUS, GroupLevel.PROJECT, GroupLevel.CLASS).map { it.label })
     }
 
     @Test
     fun run_time_sort_is_slowest_first_with_unrun_last() {
         assertEquals(listOf("stale_pass", "fail", "pass_fast", "Excluded", "queued"), testOrder(SortMode.DURATION))
-        assertEquals(listOf("alpha", "Zeta"), TreeView.of(projects().first(), ViewMode.CLASSES, SortMode.DURATION).map { it.label })
-        assertEquals(listOf(a, b), TreeView.sortProjects(projects(), SortMode.DURATION).map { it.path })
+        assertEquals(listOf("alpha", "Zeta"), classLabels(SortMode.DURATION))
+        assertEquals(listOf("A", "B"), rows(SortMode.DURATION, GroupLevel.PROJECT, GroupLevel.CLASS).map { it.label })
     }
 }

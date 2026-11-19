@@ -4,9 +4,6 @@ import com.nocrunch.rider.engine.BuildStatus
 import com.nocrunch.rider.engine.RunStatus
 import com.nocrunch.rider.engine.TestState
 
-/** Row object for the pinned section listing non-test projects whose build broke. */
-data class BuildErrorsGroup(val count: Int)
-
 /** Row object for the pinned section of projects with problems ([GroupedTree.problemsTitle] says which kind). */
 data class ProblemsGroup(val title: String, val count: Int)
 
@@ -61,8 +58,6 @@ object RowPresentation {
      * so only the red crosses are highlighted, not the green ticks. Null for anything that isn't a row of the tree.
      */
     fun of(o: Any?, editing: Boolean, anyFailures: Boolean): RowLook? = when (o) {
-        is BuildErrorsGroup -> RowLook(RowIcon(StatusIcon.ERROR, null), "Build errors", NameStyle.FAILED_BOLD,
-            listOf(Segment("  ${o.count}", StatStyle.GREY)))
         is ProblemsGroup -> RowLook(RowIcon(StatusIcon.ERROR, null), o.title, NameStyle.FAILED_BOLD,
             listOf(Segment("  ${o.count}", StatStyle.GREY)))
         is ProjectNode -> project(o, o.totals, o.excluded, 0, anyFailures)
@@ -102,7 +97,7 @@ object RowPresentation {
     }
 
     /** A project row with no tests (it never built) has no leaves to be excluded, so its own rule decides. */
-    private fun groupExcluded(o: GroupView): Boolean = if (o.leaves.isEmpty()) o.project?.excluded == true else o.excluded
+    internal fun groupExcluded(o: GroupView): Boolean = if (o.leaves.isEmpty()) o.project?.excluded == true else o.excluded
 
     private fun projectGroup(o: GroupView, project: ProjectNode, anyFailures: Boolean): RowLook =
         project(project, o.totals, groupExcluded(o), o.excludedCount.takeIf { o.partlyExcluded } ?: 0, anyFailures, o.label)

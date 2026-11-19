@@ -1,6 +1,8 @@
 package com.nocrunch.rider.ui
 
-import com.nocrunch.rider.view.ViewMode
+import com.nocrunch.rider.view.GroupLevel
+import com.nocrunch.rider.view.Grouping
+import com.nocrunch.rider.view.SortMode
 import com.nocrunch.rider.engine.TestState
 import com.nocrunch.rider.ProjectBuild
 import com.nocrunch.rider.engine.BuildStatus
@@ -49,10 +51,10 @@ class SharedModelTest {
         val project = TestTreeModel.build(tests, builds, rules, failuresOnly = false).single { it.path == unit }
         assertSame(project.counts, project.counts)
         assertSame(project.children.first().counts, project.children.first().counts)
-        for (mode in listOf(ViewMode.NAMESPACES, ViewMode.FILES)) {
-            val group = TreeView.of(project, mode).filterIsInstance<GroupView>().first()
-            assertSame(group.leaves, group.leaves, "$mode")
-            assertSame(group.counts, group.counts, "$mode")
+        for (grouping in listOf(Grouping.fromViewMode(com.nocrunch.rider.view.ViewMode.NAMESPACES), Grouping(listOf(GroupLevel.FOLDER, GroupLevel.FILE)))) {
+            val group = GroupingTree.build(listOf(project), grouping, SortMode.NAME).rows.filterIsInstance<GroupView>().first()
+            assertSame(group.leaves, group.leaves, "$grouping")
+            assertSame(group.counts, group.counts, "$grouping")
         }
     }
 

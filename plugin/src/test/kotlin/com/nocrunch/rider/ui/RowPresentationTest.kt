@@ -8,7 +8,9 @@ import com.nocrunch.rider.engine.RunKind
 import com.nocrunch.rider.engine.RunStatus
 import com.nocrunch.rider.engine.TestResultDto
 import com.nocrunch.rider.engine.TestState
-import com.nocrunch.rider.view.ViewMode
+import com.nocrunch.rider.view.GroupLevel
+import com.nocrunch.rider.view.Grouping
+import com.nocrunch.rider.view.SortMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
@@ -182,26 +184,32 @@ class RowPresentationTest {
         assertEquals("   ✔ 0<GREY>  <GREY>✖ 0<GREY>  ○ 0<GREY>  (excluded)<GREY_ITALIC>", l.statsText())
     }
 
+    private fun rows(project: ProjectNode, vararg levels: GroupLevel) =
+        GroupingTree.build(listOf(project), Grouping(levels.toList()), SortMode.NAME).rows
+
     @Test
     fun classes_and_groups_show_their_kind() {
         val project = model(t("Adds", TestState.FAILED), t("Vat", TestState.PASSED, type = "Shop.Unit.Pricing.Tax")).single()
-        val cls = TreeView.of(project, ViewMode.CLASSES).first() as ClassView
+        val cls = rows(project, GroupLevel.CLASS).first()
         val clsLook = look(cls)
         assertEquals(RowIcon(StatusIcon.FAILED, KindIcon.TEST_SET), clsLook.icon)
         assertEquals(NameStyle.FAILED, clsLook.nameStyle)
 
-        val namespace = TreeView.of(project, ViewMode.NAMESPACES).single { it is GroupView && it.label == "Shop.Unit.Pricing" }
+        val namespace = (rows(project, GroupLevel.PROJECT, GroupLevel.NAMESPACE, GroupLevel.CLASS).single().let { it as GroupView }
+            .children.single() as GroupView).children.single { it.label == "Pricing" }
         assertEquals(RowIcon(StatusIcon.PASSED, KindIcon.NAMESPACE), look(namespace).icon)
         assertEquals(NameStyle.PARENT, look(namespace).nameStyle)
 
-        val file = TreeView.of(project, ViewMode.FILES).single() as GroupView
+        val file = rows(project, GroupLevel.FILE).single()
         assertEquals(RowIcon(StatusIcon.FAILED, KindIcon.FILE, fileName = "Calc.cs"), look(file).icon)
     }
 
     @Test
     fun an_excluded_class_says_so_unless_its_project_is_excluded() {
+        // A second, included class keeps the project from being wholly excluded by the class rule alone.
         val cls = { rules: List<ExclusionRuleDto> ->
-            TreeView.of(model(t("Adds", TestState.EXCLUDED, ms = null), rules = rules).single(), ViewMode.CLASSES).single()
+            val project = model(t("Adds", TestState.EXCLUDED, ms = null), t("Other", TestState.PASSED, type = "Shop.Unit.Other"), rules = rules).single()
+            (rows(project, GroupLevel.PROJECT, GroupLevel.CLASS).single() as GroupView).children.single { it.label == "Calc" }
         }
         val excluded = look(cls(listOf(ExclusionRuleDto(unit, "Shop.Unit.Calc"))))
         assertEquals(RowIcon(StatusIcon.EXCLUDED, KindIcon.TEST_SET), excluded.icon)
@@ -211,10 +219,10 @@ class RowPresentationTest {
     }
 
     @Test
-    fun the_build_errors_section_is_red_with_its_count() {
-        val l = look(BuildErrorsGroup(2))
+    fun the_problems_section_is_red_with_its_count() {
+        val l = look(ProblemsGroup("Projects with problems", 2))
         assertEquals(RowIcon(StatusIcon.ERROR, kind = null), l.icon)
-        assertEquals("Build errors", l.name)
+        assertEquals("Projects with problems", l.name)
         assertEquals(NameStyle.FAILED_BOLD, l.nameStyle)
         assertEquals("  2<GREY>", l.statsText())
     }
@@ -233,7 +241,7 @@ class RowPresentationTest {
         assertFalse(RowPresentation.checkboxVisible(theory, editing = false))
         assertTrue(RowPresentation.checkboxVisible(theory, editing = true))
         assertFalse(RowPresentation.checkboxVisible(theory.rows.single(), editing = true), "theory rows follow their theory")
-        assertFalse(RowPresentation.checkboxVisible(BuildErrorsGroup(1), editing = true))
+        assertFalse(RowPresentation.checkboxVisible(ProblemsGroup("Build errors", 1), editing = true))
         assertFalse(RowPresentation.checkboxVisible(nonTestProject, editing = true))
         assertTrue(RowPresentation.checkboxVisible(model(t("Adds", TestState.PASSED)).single(), editing = true))
     }
@@ -325,7 +333,7 @@ class RowPresentationTest {
         assertEquals(CheckState.UNCHECKED, RowPresentation.checkState(all))
         assertEquals(CheckState.UNCHECKED, RowPresentation.checkState(test(t("Adds", TestState.EXCLUDED, ms = null), rules = listOf(ExclusionRuleDto(unit)))))
         assertEquals(CheckState.CHECKED, RowPresentation.checkState(test(t("Adds", TestState.PASSED))))
-        assertNull(RowPresentation.checkState(BuildErrorsGroup(1)))
+        assertNull(RowPresentation.checkState(ProblemsGroup("Build errors", 1)))
         assertNull(RowPresentation.checkState("root"))
     }
 }

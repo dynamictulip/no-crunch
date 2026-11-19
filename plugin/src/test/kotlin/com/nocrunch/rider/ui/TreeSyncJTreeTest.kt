@@ -1,7 +1,7 @@
 package com.nocrunch.rider.ui
 
 import com.nocrunch.rider.view.SortMode
-import com.nocrunch.rider.view.ViewMode
+import com.nocrunch.rider.view.Grouping
 import com.nocrunch.rider.engine.TestState
 import com.intellij.ui.CheckedTreeNode
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -30,18 +30,14 @@ class TreeSyncJTreeTest {
         displayName = method, state = state, durationMs = 1.0, message = null, stackTrace = null, filePath = null, line = null,
     )
 
-    /** What the panel does: filter the shared model, turn it into rows, sync. */
+    /** What the panel does: group and filter the shared model, turn it into rows, sync. */
     private fun render(all: List<ProjectNode>, failuresOnly: Boolean) {
-        val model = TestTreeModel.filter(all, failuresOnly, hideExcluded = false)
+        val grouped = GroupingTree.build(all, Grouping.DEFAULT, SortMode.NAME, failuresOnly, hideExcluded = false)
         fun spec(v: ViewNode): TreeSpec = when (v) {
             is TestView -> TreeSpec(v.node.dto.key, v.node)
-            is ClassView -> TreeSpec(v.node.type, v, children = v.children.map(::spec))
-            is GroupView -> TreeSpec("${v.kind}:${v.label}", v, children = v.children.map(::spec))
+            is GroupView -> TreeSpec(v.key, v, children = v.children.map(::spec))
         }
-        val (_, testProjects) = TreeView.splitBuildErrors(model)
-        TreeSync.sync(model = this.model, parent = root, desired = TreeView.sortProjects(testProjects, SortMode.NAME).map { p ->
-            TreeSpec(p.path, p, children = TreeView.of(p, ViewMode.CLASSES, SortMode.NAME).map(::spec))
-        })
+        TreeSync.sync(model = this.model, parent = root, desired = grouped.rows.map(::spec))
     }
 
     @Test
@@ -59,7 +55,7 @@ class TreeSyncJTreeTest {
 
         render(all, failuresOnly = true)
 
-        assertEquals(listOf(catalog, "Shop.Catalog.Tests.InventoryTests"), visibleRows())
+        assertEquals(listOf("project:$catalog", "class:$catalog|Shop.Catalog.Tests.InventoryTests"), visibleRows())
     }
 
     @Test

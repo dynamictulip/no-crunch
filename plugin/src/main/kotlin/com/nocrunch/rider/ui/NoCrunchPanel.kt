@@ -22,9 +22,9 @@ import com.intellij.util.ui.tree.TreeUtil
 import com.nocrunch.rider.NoCrunchService
 import com.nocrunch.rider.engine.EngineState
 import com.nocrunch.rider.settings.NoCrunchSettings
+import com.nocrunch.rider.view.Grouping
 import com.nocrunch.rider.view.NameColouring
 import com.nocrunch.rider.view.SortMode
-import com.nocrunch.rider.view.ViewMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.awt.BorderLayout
@@ -74,8 +74,8 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         add(column)
     }
     private var rebuilding = false
-    /** The model the tree shows; null forces the next render to sync (an empty list would match an empty model). */
-    private var lastModel: List<ProjectNode>? = null
+    /** What the tree shows, with the grouping that made it; null forces the next render to sync (an empty tree would match an empty one). */
+    private var lastModel: Pair<Grouping, GroupedTree>? = null
     private var last: ResultsSnapshot? = null
 
     private val actions = NoCrunchActions(project, service, settings, object : ActionHost {
@@ -154,20 +154,21 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private fun render(s: ResultsSnapshot) {
         last = s
-        // The shared model has every test (the bar counts them all); the tree shows it through the view filters.
-        val model = TestTreeModel.filter(s.projects, failuresOnly, settings.state.hideExcluded)
+        // The shared model has every test (the bar counts them all); the tree shows it grouped and through the view filters.
+        val grouping = currentGrouping
+        val grouped = GroupingTree.build(s.projects, grouping, sortMode, failuresOnly, settings.state.hideExcluded)
         bar.update(s.bar)
         // While paused, results can't be trusted, so hide them behind a big Resume button.
         val paused = s.state.state == EngineState.PAUSED
         if (paused) waitingLabel.text = StatusText.waiting(s.state.queued)
         (cards.layout as java.awt.CardLayout).show(cards, if (paused) PAUSED_CARD else RESULTS_CARD)
-        val hiddenBy = HiddenBy.of(hasTests = s.projects.any { it.hasTests }, shownEmpty = model.isEmpty(), failuresOnly, settings.state.hideExcluded)
+        val hiddenBy = HiddenBy.of(hasTests = s.projects.any { it.hasTests }, shownEmpty = grouped.rows.isEmpty() && grouped.problems.isEmpty(), failuresOnly, settings.state.hideExcluded)
         tree.emptyText.text = StatusText.emptyTree(s.state, hiddenBy)
         if (hiddenBy != null) tree.emptyText.appendSecondaryText("Show all tests", SimpleTextAttributes.LINK_ATTRIBUTES) { showAllTests() }
-        if (model == lastModel) return
-        lastModel = model
+        if (lastModel == grouping to grouped) return
+        lastModel = grouping to grouped
         val failuresBefore = anyFailures
-        anyFailures = model.any { it.counts.failed > 0 }
+        anyFailures = grouped.rows.any { it.counts.failed > 0 }
         val treeModel = tree.model as DefaultTreeModel
         val expanded = TreeUtil.collectExpandedPaths(tree).map { pathKey(it) }.toSet()
         val selected = tree.selectionPaths.orEmpty().map { pathKey(it) }.toSet()
@@ -176,7 +177,7 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
         try {
             // Updated in place, not rebuilt: reloading the model cleared the selection (and the details pane with
             // it), collapsed a multi-selection to one row and re-expanded everything after Collapse All.
-            TreeSync.syncTree(tree, root, specs(model))
+            TreeSync.syncTree(tree, root, specs(grouped))
             // The green tick highlights depend on whether anything fails anywhere, so every row may look different.
             if (anyFailures != failuresBefore) TreeUtil.treeNodeTraverser(root).forEach { treeModel.nodeChanged(it as CheckedTreeNode) }
             // A row that moved (sorting by status or run time) was taken out and put back, which collapses and
@@ -200,26 +201,25 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
 
     private val nameColouring: NameColouring get() = NameColouring.fromSetting(settings.state.nameColouring)
 
-    private val viewMode: ViewMode get() = ViewMode.fromSetting(settings.state.viewMode)
+    /** Read through [Grouping.fromSetting] so a saved old view mode still converts until a grouping is chosen. */
+    private val currentGrouping: Grouping get() = Grouping.fromSetting(settings.state.grouping, settings.state.viewMode)
 
-    /** The rows the tree should show. Broken non-test projects are pinned above the test projects whatever the sort. */
-    private fun specs(model: List<ProjectNode>): List<TreeSpec> {
-        val (buildErrors, testProjects) = TreeView.splitBuildErrors(model)
-        val errors = if (buildErrors.isEmpty()) emptyList() else listOf(
-            TreeSpec(BUILD_ERRORS_KEY, BuildErrorsGroup(buildErrors.size), enabled = false,
-                children = buildErrors.map { TreeSpec(it.path, it, enabled = false) }),
+    /** The rows the tree should show. Projects with problems are pinned above the rest whatever the sort. */
+    private fun specs(t: GroupedTree): List<TreeSpec> {
+        val problems = if (t.problems.isEmpty()) emptyList() else listOf(
+            TreeSpec(PROBLEMS_KEY, ProblemsGroup(t.problemsTitle, t.problems.size), enabled = false,
+                children = t.problems.map { TreeSpec(it.path, it, enabled = false) }),
         )
-        return errors + TreeView.sortProjects(testProjects, sortMode).map { p ->
-            TreeSpec(p.path, p, checked = !p.excluded, enabled = choosingTests, children = TreeView.of(p, viewMode, sortMode).map(::spec))
-        }
+        return problems + t.rows.map(::spec)
     }
 
-    /** Tests keep their [TestNode] as the row object; classes and groups use their [ViewNode]. */
+    /** Tests keep their [TestNode] as the row object; every group level uses its [GroupView]. */
     private fun spec(v: ViewNode): TreeSpec = when (v) {
         is TestView -> TreeSpec(v.node.dto.key, v.node, !v.excluded, choosingTests && !v.locked,
             v.node.rows.map { TreeSpec(it.dto.key, it, checked = !it.excluded, enabled = false) })
-        is ClassView -> TreeSpec(v.node.type, v, !v.excluded, choosingTests && !v.locked, v.children.map(::spec))
-        is GroupView -> TreeSpec("${v.kind}:${v.label}", v, !v.excluded, choosingTests && !v.locked, v.children.map(::spec))
+        // A partly excluded row draws a partial box but is not checked, so clicking it includes everything under it.
+        is GroupView -> TreeSpec(v.key, v, RowPresentation.checkState(v) == CheckState.CHECKED,
+            choosingTests && TreeSelection.checkboxRules(v) != null, v.children.map(::spec))
     }
 
     private fun pathKey(path: TreePath): String = path.path.joinToString("/") { (it as? KeyedTreeNode)?.key ?: "root" }
@@ -246,6 +246,6 @@ class NoCrunchPanel(private val project: Project, parent: Disposable) : SimpleTo
     private companion object {
         const val RESULTS_CARD = "results"
         const val PAUSED_CARD = "paused"
-        const val BUILD_ERRORS_KEY = "build-errors"
+        const val PROBLEMS_KEY = "problems"
     }
 }

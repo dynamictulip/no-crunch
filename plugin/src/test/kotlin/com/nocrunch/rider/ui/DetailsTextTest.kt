@@ -8,7 +8,9 @@ import com.nocrunch.rider.engine.RunKind
 import com.nocrunch.rider.engine.RunStatus
 import com.nocrunch.rider.engine.TestResultDto
 import com.nocrunch.rider.engine.TestState
-import com.nocrunch.rider.view.ViewMode
+import com.nocrunch.rider.view.GroupLevel
+import com.nocrunch.rider.view.Grouping
+import com.nocrunch.rider.view.SortMode
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
@@ -86,17 +88,41 @@ class DetailsTextTest {
         assertEquals("$unit\n", text(TestTreeModel.buildAll(listOf(t(TestState.PASSED)), emptyMap(), emptyList()).single()))
     }
 
+    private fun rows(projects: List<ProjectNode>, vararg levels: GroupLevel) =
+        GroupingTree.build(projects, Grouping(levels.toList()), SortMode.NAME).rows
+
+    @Test
+    fun a_project_group_shows_what_a_project_row_shows() {
+        val core = "src/Core/Core.csproj"
+        val builds = mapOf(
+            core to ProjectBuild(core, BuildStatus.FAILED, "error CS1002"),
+            unit to ProjectBuild(unit, BuildStatus.BLOCKED, blockedBy = core),
+        )
+        val projects = TestTreeModel.buildAll(listOf(t(TestState.PASSED)), builds, emptyList(),
+            mapOf(unit to RunFinishedDto(unit, RunStatus.CRASHED, "exit code 134")))
+        val row = rows(projects, GroupLevel.PROJECT, GroupLevel.CLASS).single { it.label == "Unit" }
+
+        assertEquals("$unit\nBuild: blocked (blocked by $core)\n\nRun: [crashed] — exit code 134\n", text(row))
+        assertEquals(text(projects.single { it.path == unit }), text(row))
+    }
+
+    @Test
+    fun a_project_group_with_no_build_shows_just_its_path() {
+        val projects = TestTreeModel.buildAll(listOf(t(TestState.PASSED)), emptyMap(), emptyList())
+        assertEquals("$unit\n", text(rows(projects, GroupLevel.PROJECT, GroupLevel.CLASS).single()))
+    }
+
     @Test
     fun a_class_shows_its_counts_run_time_and_freshness() {
         val project = TestTreeModel.buildAll(listOf(t(TestState.STALE, last = TestState.FAILED)), emptyMap(), emptyList()).single()
-        assertEquals("Calc\n✔ 0  ✖ 0  ○ 1   12 ms   (stale)\n", text(TreeView.of(project, ViewMode.CLASSES).single()))
+        assertEquals("Calc\n✔ 0  ✖ 0  ○ 1   12 ms   (stale)\n", text(rows(listOf(project), GroupLevel.CLASS).single()))
         val failing = TestTreeModel.buildAll(listOf(t(TestState.FAILED)), emptyMap(), emptyList()).single()
-        assertEquals("Calc\n✔ 0  [✖ 1]  ○ 0   12 ms\n", text(TreeView.of(failing, ViewMode.CLASSES).single()))
+        assertEquals("Calc\n✔ 0  [✖ 1]  ○ 0   12 ms\n", text(rows(listOf(failing), GroupLevel.CLASS).single()))
     }
 
     @Test
     fun nothing_selected_clears_the_pane() {
         assertNull(DetailsText.of(null))
-        assertNull(DetailsText.of(BuildErrorsGroup(1)))
+        assertNull(DetailsText.of(ProblemsGroup("Build errors", 1)))
     }
 }

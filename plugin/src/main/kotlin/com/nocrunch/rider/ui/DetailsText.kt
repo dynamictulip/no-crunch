@@ -14,6 +14,8 @@ object DetailsText {
     fun of(o: Any?): List<DetailPart>? = when (o) {
         is TestNode -> build { test(o) }
         is ProjectNode -> build { project(o) }
+        // A project row says what the project's own row says: its build and run problems.
+        is GroupView -> build { o.project?.let { project(it) } ?: view(o) }
         is ViewNode -> build { view(o) }
         else -> null
     }
