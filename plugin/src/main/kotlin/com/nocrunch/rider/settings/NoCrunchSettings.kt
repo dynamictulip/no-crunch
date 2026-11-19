@@ -22,8 +22,12 @@ class NoCrunchSettingsState : BaseState() {
     var dotnetPath by string("")
     /** Tool window: hide excluded projects, classes and tests. */
     var hideExcluded by property(false)
-    /** Tool window grouping: a [ViewMode] name. */
+    /** Old tool window grouping, a [ViewMode] name. Only read to convert it to [grouping] when none is saved yet. */
     var viewMode by string(ViewMode.DEFAULT.name)
+    /** Tool window grouping: comma-separated [GroupLevel] names, outermost first. Blank = never saved. */
+    var grouping by string("")
+    /** The last few groupings picked, most recent first: [grouping] values joined by `;`. */
+    var recentGroupings by string("")
     /** Tool window row order: a [SortMode] name. */
     var sortMode by string(SortMode.DEFAULT.name)
     /** Tool window test-name colouring: a [NameColouring] name. */
