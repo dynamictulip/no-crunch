@@ -173,7 +173,7 @@ internal class NoCrunchActions(
             }
         })
         add(DefaultActionGroup("Colour Test Names", true).apply {
-            templatePresentation.icon = AllIcons.Actions.Colors
+            templatePresentation.icon = AllIcons.Actions.Highlighting
             NameColouring.entries.forEach { mode ->
                 add(choice(mode.title, { NameColouring.fromSetting(settings.state.nameColouring) == mode }) {
                     settings.state.nameColouring = mode.name
