@@ -9,7 +9,7 @@ class PaletteTest {
     @Test
     fun pass_and_fail_light_values_are_the_spec_hexes() {
         assertEquals(0x009E73, Palette.PASS_LIGHT.rgb and 0xFFFFFF)
-        assertEquals(0xD55E00, Palette.FAIL_LIGHT.rgb and 0xFFFFFF)
+        assertEquals(0xC8283C, Palette.FAIL_LIGHT.rgb and 0xFFFFFF)
     }
 
     @Test
@@ -26,7 +26,7 @@ class PaletteTest {
             JBColor.setDark(false)
             assertEquals(Palette.FAIL_LIGHT.rgb and 0xFFFFFF, faded.rgb and 0xFFFFFF)
             JBColor.setDark(true)
-            assertEquals(0xF07A2A, faded.rgb and 0xFFFFFF)
+            assertEquals(0xE04558, faded.rgb and 0xFFFFFF)
         } finally {
             JBColor.setDark(false)
         }
