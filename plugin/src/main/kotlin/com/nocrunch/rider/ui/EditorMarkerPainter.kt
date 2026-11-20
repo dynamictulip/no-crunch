@@ -12,7 +12,12 @@ import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.project.Project
+import com.nocrunch.rider.NoCrunchService
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import java.io.File
 import javax.swing.Icon
 
 /**
@@ -20,7 +25,10 @@ import javax.swing.Icon
  * Only the highlighters it added are ever removed.
  */
 @Service(Service.Level.PROJECT)
-class EditorMarkerPainter(private val project: Project, @Suppress("UNUSED_PARAMETER") scope: CoroutineScope) : Disposable {
+class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) : Disposable {
+    /** The latest markers per file path, worked out off the EDT whenever results change. */
+    @Volatile private var markers: Map<String, List<LineMarker>> = emptyMap()
+
     /** Highlighters this painter added, per editor. Touched on the EDT only. */
     private val painted = HashMap<Editor, List<RangeHighlighter>>()
 
@@ -34,7 +42,21 @@ class EditorMarkerPainter(private val project: Project, @Suppress("UNUSED_PARAME
                 painted.remove(event.editor)
             }
         }, this)
+        scope.launch(Dispatchers.Default) {
+            NoCrunchResults.getInstance(project).snapshots
+                .map { EditorMarkers.compute(it.tests.values, ::isRepoFile) }
+                .collect {
+                    markers = it
+                    refresh()
+                }
+        }
         refresh()
+    }
+
+    /** A real source file inside the repo (not its mirror), so a stack frame there can take a marker. */
+    private fun isRepoFile(path: String): Boolean {
+        val root = NoCrunchService.getInstance(project).repoRoot ?: return false
+        return path.startsWith("$root/") && !path.startsWith("$root/.nocrunch/") && File(path).isFile
     }
 
     /** Repaints every open editor of the project from the current markers. */
@@ -47,18 +69,20 @@ class EditorMarkerPainter(private val project: Project, @Suppress("UNUSED_PARAME
     private fun paint(editor: Editor) {
         painted.remove(editor)?.forEach { editor.markupModel.removeHighlighter(it) }
         val path = editor.virtualFile?.path ?: return
-        val added = markersFor(path).mapNotNull { marker ->
-            if (marker.line !in 0 until editor.document.lineCount) return@mapNotNull null
-            editor.markupModel.addLineHighlighter(null, marker.line, HighlighterLayer.ADDITIONAL_SYNTAX).also {
+        val text = editor.document.immutableCharSequence
+        // Markers that land on the same line (a test's own line and a failure's) collapse to the best one.
+        val byLine = HashMap<Int, LineMarker>()
+        markers[path].orEmpty().forEach { marker ->
+            val line = landingLine(text, marker) ?: return@forEach
+            byLine.merge(line, marker) { old, new -> if (new.kind < old.kind) new else old }
+        }
+        val added = byLine.map { (line, marker) ->
+            editor.markupModel.addLineHighlighter(null, line, HighlighterLayer.ADDITIONAL_SYNTAX).also {
                 it.gutterIconRenderer = MarkerRenderer(marker)
             }
         }
         if (added.isNotEmpty()) painted[editor] = added
     }
-
-    // PROBE: removed in Task 5. Marks line 1 of every open file so we can see gutter icons render in Rider.
-    private fun markersFor(@Suppress("UNUSED_PARAMETER") path: String): List<LineMarker> =
-        listOf(LineMarker(0, MarkerKind.PASS, "probe"))
 
     override fun dispose() {
         painted.clear()
@@ -75,4 +99,16 @@ class EditorMarkerPainter(private val project: Project, @Suppress("UNUSED_PARAME
     companion object {
         fun getInstance(project: Project): EditorMarkerPainter = project.service()
     }
+}
+
+/**
+ * The 0-based line to paint [marker] on. A test's reported line is often an attribute like `[TestMethod]`, so a marker
+ * with a method lands on the line of the method's name. Null when the line is past the end of [text] (the file changed).
+ */
+fun landingLine(text: CharSequence, marker: LineMarker): Int? {
+    val lineCount = text.count { it == '\n' } + 1
+    if (marker.line !in 0 until lineCount) return null
+    val method = marker.method ?: return marker.line
+    val offset = TestLocator.caretOffset(text, marker.line, method)
+    return text.subSequence(0, offset).count { it == '\n' }
 }
