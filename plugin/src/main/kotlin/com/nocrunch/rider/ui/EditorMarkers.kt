@@ -16,15 +16,39 @@ data class LineMarker(val line: Int, val kind: MarkerKind, val tooltip: String, 
 object EditorMarkers {
     /**
      * Markers per file path, at most one per line, sorted by line. A test method gets its latest outcome (hollow while
-     * stale). Tests that haven't run, are skipped or are excluded get none.
+     * stale). A failing test also marks the line it threw from, in the first stack frame inside the repo that
+     * [isRepoFile] accepts. Tests that haven't run, are skipped or are excluded get none.
      */
-    fun compute(results: Collection<TestResultDto>, @Suppress("UNUSED_PARAMETER") isRepoFile: (String) -> Boolean): Map<String, List<LineMarker>> {
-        val byFile = HashMap<String, MutableList<LineMarker>>()
-        results.asSequence()
-            .filter { it.filePath != null && it.line != null && it.state != TestState.EXCLUDED }
-            .groupBy { it.filePath!! to it.line!! }
-            .forEach { (at, group) -> testMarker(at.second, group)?.let { byFile.getOrPut(at.first) { ArrayList() } += it } }
-        return byFile.mapValues { (_, markers) -> markers.sortedBy { it.line } }
+    fun compute(results: Collection<TestResultDto>, isRepoFile: (String) -> Boolean): Map<String, List<LineMarker>> {
+        val byLine = HashMap<Pair<String, Int>, LineMarker>()
+        fun add(file: String, marker: LineMarker) {
+            byLine.merge(file to marker.line, marker) { old, new -> if (new.kind < old.kind) new else old }
+        }
+        val located = results.filter { it.filePath != null && it.line != null && it.state != TestState.EXCLUDED }
+        located.groupBy { it.filePath!! to it.line!! }.forEach { (at, group) -> testMarker(at.second, group)?.let { add(at.first, it) } }
+        located.filter { shownOutcome(it) == TestState.FAILED }.forEach { r ->
+            val (file, line) = topRepoFrame(r.stackTrace, isRepoFile) ?: return@forEach
+            add(file, causeMarker(line, r))
+        }
+        return byLine.entries.groupBy({ it.key.first }, { it.value }).mapValues { (_, markers) -> markers.sortedBy { it.line } }
+    }
+
+    private val STACK_FRAME = Regex("""in (/[^\n]+?):line (\d+)""")
+
+    /** The first stack frame (`in /path/File.cs:line 12`) in a file [isRepoFile] accepts, as path and 1-based line. */
+    fun topRepoFrame(stackTrace: String?, isRepoFile: (String) -> Boolean): Pair<String, Int>? =
+        stackTrace?.let { STACK_FRAME.findAll(it) }
+            ?.map { it.groupValues[1] to it.groupValues[2].toInt() }
+            ?.firstOrNull { isRepoFile(it.first) }
+
+    private fun causeMarker(line: Int, r: TestResultDto): LineMarker {
+        val name = r.method?.substringBefore('(') ?: r.displayName
+        return if (r.state.isOutcome) {
+            val reason = r.message?.lineSequence()?.firstOrNull()?.takeIf { it.isNotBlank() } ?: name
+            LineMarker(line - 1, MarkerKind.CAUSE, "Cause of failure: $reason")
+        } else {
+            LineMarker(line - 1, MarkerKind.FAIL_STALE, "Failing, stale: $name")
+        }
     }
 
     private fun shownOutcome(r: TestResultDto): TestState? = if (r.state.isOutcome) r.state else r.lastOutcome
