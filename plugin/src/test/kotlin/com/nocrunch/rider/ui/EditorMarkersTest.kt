@@ -154,4 +154,14 @@ class EditorMarkersTest {
         )
         assertEquals(MarkerKind.CAUSE, markers[testFile]!!.single { it.line == 11 }.kind)
     }
+
+    @Test
+    fun memoized_asks_once_per_input() {
+        var calls = 0
+        val cached = memoized<String, Boolean> { calls++; it.endsWith(".cs") }
+        assertTrue(cached("/repo/A.cs"))
+        assertTrue(cached("/repo/A.cs"))
+        assertEquals(false, cached("/repo/B.txt"))
+        assertEquals(2, calls)
+    }
 }

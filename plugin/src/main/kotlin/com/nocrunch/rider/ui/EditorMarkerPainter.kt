@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.event.EditorFactoryEvent
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.editor.event.EditorFactoryListener
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.markup.GutterIconRenderer
@@ -33,6 +34,9 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
     /** Highlighters this painter added, per editor. Touched on the EDT only. */
     private val painted = HashMap<Editor, List<RangeHighlighter>>()
 
+    /** What each editor was last painted with, so an editor whose markers haven't changed is left alone. */
+    private val lastLayout = HashMap<Editor, Map<Int, LineMarker>>()
+
     init {
         EditorFactory.getInstance().addEditorFactoryListener(object : EditorFactoryListener {
             override fun editorCreated(event: EditorFactoryEvent) {
@@ -41,11 +45,16 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
 
             override fun editorReleased(event: EditorFactoryEvent) {
                 painted.remove(event.editor)
+                lastLayout.remove(event.editor)
             }
         }, this)
         scope.launch(Dispatchers.Default) {
             NoCrunchResults.getInstance(project).snapshots
-                .map { EditorMarkers.compute(it.tests.values, ::isRepoFile) }
+                .map { snapshot ->
+                    // Stack frames repeat across failures: check the disk once per file, not once per frame.
+                    val isRepoFile = memoized(::isRepoFile)
+                    EditorMarkers.compute(snapshot.tests.values, isRepoFile)
+                }
                 .collect {
                     markers = it
                     refresh()
@@ -68,26 +77,31 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
     }
 
     private fun paint(editor: Editor) {
-        painted.remove(editor)?.forEach { editor.markupModel.removeHighlighter(it) }
-        if (!NoCrunchSettings.getInstance(project).state.showEditorMarkers) return
-        val path = editor.virtualFile?.path ?: return
-        val text = editor.document.immutableCharSequence
-        // Markers that land on the same line (a test's own line and a failure's) collapse to the best one.
-        val byLine = HashMap<Int, LineMarker>()
-        markers[path].orEmpty().forEach { marker ->
-            val line = landingLine(text, marker) ?: return@forEach
-            byLine.merge(line, marker) { old, new -> if (new.kind < old.kind) new else old }
+        if (!NoCrunchSettings.getInstance(project).state.showEditorMarkers) {
+            clear(editor)
+            return
         }
-        val added = byLine.map { (line, marker) ->
+        // The editor's file isn't always set the moment the editor is created; the document knows it.
+        val path = (editor.virtualFile ?: FileDocumentManager.getInstance().getFile(editor.document))?.path ?: return
+        val layout = layout(editor.document.immutableCharSequence, markers[path].orEmpty())
+        if (lastLayout[editor] == layout) return
+        clear(editor)
+        painted[editor] = layout.map { (line, marker) ->
             editor.markupModel.addLineHighlighter(null, line, HighlighterLayer.ADDITIONAL_SYNTAX).also {
                 it.gutterIconRenderer = MarkerRenderer(marker)
             }
         }
-        if (added.isNotEmpty()) painted[editor] = added
+        lastLayout[editor] = layout
+    }
+
+    private fun clear(editor: Editor) {
+        painted.remove(editor)?.forEach { editor.markupModel.removeHighlighter(it) }
+        lastLayout.remove(editor)
     }
 
     override fun dispose() {
         painted.clear()
+        lastLayout.clear()
     }
 
     private class MarkerRenderer(private val marker: LineMarker) : GutterIconRenderer() {
@@ -113,4 +127,17 @@ fun landingLine(text: CharSequence, marker: LineMarker): Int? {
     val method = marker.method ?: return marker.line
     val offset = TestLocator.caretOffset(text, marker.line, method)
     return text.subSequence(0, offset).count { it == '\n' }
+}
+
+/**
+ * Where each marker is painted, by 0-based line. Markers that land on the same line (a test's own line and a failure's)
+ * collapse to the best kind; markers past the end of [text] are dropped.
+ */
+fun layout(text: CharSequence, markers: List<LineMarker>): Map<Int, LineMarker> {
+    val byLine = HashMap<Int, LineMarker>()
+    markers.forEach { marker ->
+        val line = landingLine(text, marker) ?: return@forEach
+        byLine.merge(line, marker) { old, new -> if (new.kind < old.kind) new else old }
+    }
+    return byLine
 }

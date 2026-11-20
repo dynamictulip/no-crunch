@@ -70,3 +70,9 @@ object EditorMarkers {
         return LineMarker(line - 1, kind, "$label: $name", first.method?.substringBefore('('))
     }
 }
+
+/** [f] that asks once per input: for a check that touches the disk, within one batch of results. */
+fun <A, B> memoized(f: (A) -> B): (A) -> B {
+    val cache = HashMap<A, B>()
+    return { a -> cache.getOrPut(a) { f(a) } }
+}

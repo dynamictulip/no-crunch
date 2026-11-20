@@ -1,5 +1,6 @@
 package com.nocrunch.rider.ui
 
+import com.intellij.ui.JBColor
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -16,5 +17,18 @@ class PaletteTest {
         val faded = Palette.faded(Palette.PASS_LIGHT)
         assertEquals(Palette.PASS_LIGHT.rgb and 0xFFFFFF, faded.rgb and 0xFFFFFF)
         assertTrue(Math.abs(faded.alpha - (0.55 * 255).toInt()) <= 1, "alpha was ${faded.alpha}")
+    }
+
+    @Test
+    fun a_faded_theme_aware_colour_follows_the_theme() {
+        val faded = Palette.faded(Palette.FAIL)
+        try {
+            JBColor.setDark(false)
+            assertEquals(Palette.FAIL_LIGHT.rgb and 0xFFFFFF, faded.rgb and 0xFFFFFF)
+            JBColor.setDark(true)
+            assertEquals(0xF07A2A, faded.rgb and 0xFFFFFF)
+        } finally {
+            JBColor.setDark(false)
+        }
     }
 }

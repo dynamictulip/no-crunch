@@ -26,4 +26,25 @@ class MarkerLinesTest {
     fun last_line_is_valid_even_without_a_trailing_newline() {
         assertEquals(2, landingLine("a\nb\nc", LineMarker(2, MarkerKind.FAIL, "t")))
     }
+
+    @Test
+    fun markers_landing_on_the_same_line_collapse_to_the_best_kind() {
+        // The test's reported line is the attribute (0); it lands on the method line (1), where the failure was thrown.
+        val layout = layout(text, listOf(
+            LineMarker(0, MarkerKind.FAIL, "Failing: Total_works", method = "Total_works"),
+            LineMarker(1, MarkerKind.CAUSE, "Cause of failure: boom"),
+        ))
+        assertEquals(mapOf(1 to LineMarker(1, MarkerKind.CAUSE, "Cause of failure: boom")), layout)
+    }
+
+    @Test
+    fun layout_skips_markers_past_the_end() {
+        assertEquals(emptyMap<Int, LineMarker>(), layout("a\nb", listOf(LineMarker(9, MarkerKind.PASS, "t"))))
+    }
+
+    @Test
+    fun layout_is_equal_for_equal_input_so_unchanged_editors_can_be_skipped() {
+        val markers = listOf(LineMarker(0, MarkerKind.PASS, "t", method = "Total_works"))
+        assertEquals(layout(text, markers), layout(text, markers.toList()))
+    }
 }
