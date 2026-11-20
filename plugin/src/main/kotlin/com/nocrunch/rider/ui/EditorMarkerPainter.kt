@@ -13,6 +13,7 @@ import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.project.Project
 import com.nocrunch.rider.NoCrunchService
+import com.nocrunch.rider.settings.NoCrunchSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.map
@@ -68,6 +69,7 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
 
     private fun paint(editor: Editor) {
         painted.remove(editor)?.forEach { editor.markupModel.removeHighlighter(it) }
+        if (!NoCrunchSettings.getInstance(project).state.showEditorMarkers) return
         val path = editor.virtualFile?.path ?: return
         val text = editor.document.immutableCharSequence
         // Markers that land on the same line (a test's own line and a failure's) collapse to the best one.

@@ -32,6 +32,8 @@ class NoCrunchSettingsState : BaseState() {
     var sortMode by string(SortMode.DEFAULT.name)
     /** Tool window test-name colouring: a [NameColouring] name. */
     var nameColouring by string(NameColouring.DEFAULT.name)
+    /** Show test status markers in the editor gutter. */
+    var showEditorMarkers by property(true)
 }
 
 @Service(Service.Level.PROJECT)

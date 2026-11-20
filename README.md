@@ -10,6 +10,7 @@ Save a file and No Crunch rebuilds only the projects your change affects and rer
 - **Microsoft.Testing.Platform (MTP).** Test apps are driven in MTP server mode (JSON-RPC), so you get per-test results, locations and stack traces.
 - **Exclusions.** Untick projects, classes or single tests (e.g. E2E suites) in the tool window. They're saved to `<Solution>.nocrunch.user` next to the `.sln`/`.slnx`. Commit it or ignore it, whichever suits you.
 - **Group by.** The toolbar's Group By button opens a popup to tick and reorder the levels the tree nests by: Project, Folder, File, Namespace and Class (e.g. Project › Namespace › Class), or none for a flat list of tests. Nested classes sit inside their outer class. The last few groupings you used are listed under Recent for one-click switching. A group with only some of its tests excluded shows a partial checkbox and an excluded count.
+- **Editor markers.** The editor gutter shows each test's status: a circle for passing, a diamond for failing, and a cross on the line a failure was thrown from (in test or production code). A hollow marker means the result is stale. Shape carries the meaning, so it works without telling green from red. The eye button in the toolbar turns the markers on and off.
 - **Survives restarts.** Last results show as stale on startup. The engine then catches up on anything that changed while Rider was closed.
 
 ## Requirements

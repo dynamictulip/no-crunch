@@ -182,6 +182,14 @@ internal class NoCrunchActions(
                 })
             }
         })
+        add(object : ToggleAction("Show Editor Markers", "Show test status markers in the editor gutter", AllIcons.Actions.Show) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun isSelected(e: AnActionEvent) = settings.state.showEditorMarkers
+            override fun setSelected(e: AnActionEvent, state: Boolean) {
+                settings.state.showEditorMarkers = state
+                EditorMarkerPainter.getInstance(project).refresh()
+            }
+        })
         add(DefaultActionGroup("Sort By", true).apply {
             templatePresentation.icon = AllIcons.ObjectBrowser.Sorted
             SortMode.entries.forEach { mode ->
