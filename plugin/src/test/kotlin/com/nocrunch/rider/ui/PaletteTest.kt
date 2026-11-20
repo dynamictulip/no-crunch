@@ -4,6 +4,7 @@ import com.intellij.ui.JBColor
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.awt.Color
 
 class PaletteTest {
     @Test
@@ -27,6 +28,28 @@ class PaletteTest {
             assertEquals(Palette.FAIL_LIGHT.rgb and 0xFFFFFF, faded.rgb and 0xFFFFFF)
             JBColor.setDark(true)
             assertEquals(0xE04558, faded.rgb and 0xFFFFFF)
+        } finally {
+            JBColor.setDark(false)
+        }
+    }
+
+    private fun luminance(c: Color): Double {
+        fun ch(v: Int): Double = (v / 255.0).let { if (it <= 0.03928) it / 12.92 else Math.pow((it + 0.055) / 1.055, 2.4) }
+        return 0.2126 * ch(c.red) + 0.7152 * ch(c.green) + 0.0722 * ch(c.blue)
+    }
+
+    private fun contrast(a: Color, b: Color): Double {
+        val (hi, lo) = luminance(a).let { x -> luminance(b).let { y -> maxOf(x, y) to minOf(x, y) } }
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    @Test
+    fun failure_text_is_readable_in_both_themes() {
+        try {
+            JBColor.setDark(false)
+            assertTrue(contrast(Color(Palette.FAIL_TEXT.rgb), Color.WHITE) >= 4.5, "light")
+            JBColor.setDark(true)
+            assertTrue(contrast(Color(Palette.FAIL_TEXT.rgb), Color(0x1E1F22)) >= 6.0, "dark")
         } finally {
             JBColor.setDark(false)
         }

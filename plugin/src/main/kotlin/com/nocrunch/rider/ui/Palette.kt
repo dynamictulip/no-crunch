@@ -19,6 +19,9 @@ object Palette {
     val PASS: JBColor = JBColor(PASS_LIGHT, PASS_DARK)
     val FAIL: JBColor = JBColor(FAIL_LIGHT, FAIL_DARK)
 
+    /** The failure red for text: the same crimson, lighter in the dark theme where [FAIL] is too dim to read as text. */
+    val FAIL_TEXT: JBColor = JBColor(FAIL_LIGHT, Color(0xFF7A88))
+
     /** Same colour, see-through: for results from an earlier run (stale). */
     fun faded(c: Color): Color = ColorUtil.withAlpha(c, 0.55)
 }
