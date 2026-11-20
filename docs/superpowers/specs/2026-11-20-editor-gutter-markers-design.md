@@ -31,13 +31,13 @@ NCrunch-style markers in the editor gutter, so you see test status without openi
 |---|---|---|
 | Passing | filled circle | green `#009E73` |
 | Passing, stale | hollow circle | green |
-| Failing | filled diamond | red `#C8283C` |
+| Failing | filled diamond | the stock failed-test icon red |
 | Failing, stale | hollow diamond | red |
 | Cause of failure | bold cross | red |
 
 Only two hues, green and red. Failing and cause share the red, and shape tells them apart. The stale variant is always the same shape drawn hollow. There is no stale cause marker: a stale cause line shows as failing, stale until the rerun. The "not covered" state is not drawn in this version.
 
-These are an Okabe-Ito bluish green and a crimson red (a vermillion was tried first but read as orange), chosen over a traditional green and red because they stay separable under the common types of colour blindness. They have similar lightness, so shape is what keeps them apart for red-green colour blindness; colour reinforces it.
+These are an Okabe-Ito bluish green and the stock failed-test icon's red, read from the icon at runtime so it follows the theme (a vermillion and a crimson were tried first), chosen over a traditional green and red because they stay separable under the common types of colour blindness. They have similar lightness, so shape is what keeps them apart for red-green colour blindness; colour reinforces it.
 
 ## One palette across the app
 

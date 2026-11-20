@@ -145,12 +145,12 @@ internal class TestTreeRenderer(
     }
 
     private companion object {
-        val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Palette.FAIL_TEXT)
-        val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, Palette.FAIL_TEXT)
+        val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Palette.FAIL)
+        val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, Palette.FAIL)
         val PASSED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, Palette.PASS)
         val MANUAL = SimpleTextAttributes(SimpleTextAttributes.STYLE_ITALIC, JBColor.BLUE)
         /** Faded palette red for failures from an earlier run (stale, queued or running again). */
-        val STALE_RED = Palette.faded(Palette.FAIL_TEXT)
+        val STALE_RED = Palette.faded(Palette.FAIL)
         val STALE_FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, STALE_RED)
         val STALE_FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, STALE_RED)
     }
