@@ -52,8 +52,8 @@ class ProgressBar : JComponent() {
     }
 
     private fun colour(c: BarColour): Color = when (c) {
-        BarColour.PASSING -> JBColor(Color(0x3F, 0x9E, 0x4D), Color(0x3B, 0x8A, 0x46))
-        BarColour.FAILING -> JBColor(Color(0xD6, 0x45, 0x45), Color(0xB8, 0x3C, 0x3C))
+        BarColour.PASSING -> Palette.PASS
+        BarColour.FAILING -> Palette.FAIL
         BarColour.RUNNING -> JBColor(Color(0x3D, 0x7E, 0xD8), Color(0x35, 0x6D, 0xBD))
         BarColour.NEUTRAL -> JBColor(Color(0xB0, 0xB0, 0xB0), Color(0x5A, 0x5D, 0x61))
     }

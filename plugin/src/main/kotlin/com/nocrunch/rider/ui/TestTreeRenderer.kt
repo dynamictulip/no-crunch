@@ -16,7 +16,6 @@ import com.intellij.util.ui.EmptyIcon
 import com.intellij.util.ui.JBUI
 import com.nocrunch.rider.view.NameColouring
 import java.awt.BorderLayout
-import java.awt.Color
 import java.awt.Font
 import javax.swing.Icon
 import javax.swing.JTree
@@ -146,12 +145,12 @@ internal class TestTreeRenderer(
     }
 
     private companion object {
-        val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, JBColor.RED)
-        val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, JBColor.RED)
-        val PASSED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, JBColor(Color(0x3C, 0x8A, 0x3F), Color(0x5F, 0xB8, 0x65)))
+        val FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Palette.FAIL)
+        val FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, Palette.FAIL)
+        val PASSED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, Palette.PASS)
         val MANUAL = SimpleTextAttributes(SimpleTextAttributes.STYLE_ITALIC, JBColor.BLUE)
-        /** Muted red for failures from an earlier run (stale, queued or running again). */
-        val STALE_RED = JBColor(Color(0xC9, 0x8A, 0x8A), Color(0x8C, 0x55, 0x55))
+        /** Faded palette red for failures from an earlier run (stale, queued or running again). */
+        val STALE_RED = Palette.faded(Palette.FAIL)
         val STALE_FAILED = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, STALE_RED)
         val STALE_FAILED_BOLD = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, STALE_RED)
     }
