@@ -108,13 +108,18 @@ public sealed class EngineServer : IEngineEvents, IAsyncDisposable
         var dotnet = string.IsNullOrWhiteSpace(p.DotnetPath) ? "dotnet" : p.DotnetPath;
         var runner = new ProcessRunner();
         var query = new DotnetMsBuildQuery(runner, map, dotnet);
+        // Detecting dotnet-coverage runs one quick process; initialize waits for it.
+        var coverage = p.Coverage == false ? null : Task.Run(() => CoverageRunFactory.CreateAsync(runner,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), Environment.GetEnvironmentVariable("PATH"),
+            map, layout, (level, message) => events.Log(level, message), CancellationToken.None)).GetAwaiter().GetResult();
         var core = new EngineCore(
             new SharedMirrorWorkspace(layout, map),
             ct => ProjectGraph.LoadAsync(layout, query, ct),
             new ProjectBuilder(runner, map, dotnet),
             new MtpTestRunner(map, TestTimeout(p)),
             new ResultStore(Path.Combine(layout.StateDir, "results.json")),
-            events, map, layout.SolutionPath);
+            events, map, layout.SolutionPath,
+            coverage, coverage is null ? null : new CoverageStore(Path.Combine(layout.StateDir, "coverage.json")));
         if (p.DebounceMs > 0) core.Debounce = TimeSpan.FromMilliseconds(p.DebounceMs);
         if (p.MaxParallel > 0) core.MaxParallelTestProjects = p.MaxParallel;
         return (core, new InitializeResult(ProtocolVersion, layout.RepoRoot, layout.MirrorRoot));

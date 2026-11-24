@@ -1,4 +1,5 @@
 using NoCrunch.Engine.Build;
+using NoCrunch.Engine.Coverage;
 using NoCrunch.Engine.Graph;
 using NoCrunch.Engine.Layout;
 using NoCrunch.Engine.Testing;
@@ -19,13 +20,20 @@ public sealed class EngineCore(
     ResultStore store,
     IEngineEvents events,
     PathMap map,
-    string solutionPath) : IAsyncDisposable
+    string solutionPath,
+    ICoverageRunFactory? coverageRuns = null,
+    CoverageStore? coverageStore = null) : IAsyncDisposable
 {
     public const int ReconcileThreshold = 200;
 
     private readonly object _lock = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly ResultBook _results = new();
+    private readonly CoverageBook _coverage = new();
+    /// <summary>Coverage restored from disk is sent once the first cycle has loaded the project graph (it is needed to place not-covered lines).</summary>
+    private bool _coverageRestorePending;
+    /// <summary>Held while the complete coverage set is computed and sent, so an older set never arrives after a newer one.</summary>
+    private readonly SemaphoreSlim _coverageSend = new(1, 1);
     private readonly HashSet<string> _unhealthy = new(StringComparer.Ordinal);
     private readonly HashSet<string> _builtThisSession = new(StringComparer.Ordinal);
     private Pending _pending = new();
@@ -60,6 +68,12 @@ public sealed class EngineCore(
             _pending.All = true;
         }
         if (shown.Count > 0) await events.TestResults(shown);
+        if (coverageStore is not null && coverageStore.Load() is { Count: > 0 } savedCoverage)
+        {
+            _coverage.Restore(savedCoverage);
+            _coverageRestorePending = true;
+        }
+        if (coverageRuns is not null) await events.CoverageStatus(await coverageRuns.CheckAsync(ct));
         _loop = Task.Run(LoopAsync, CancellationToken.None);
         Signal();
     }
@@ -275,6 +289,11 @@ public sealed class EngineCore(
                 needGraph = false;
             }
             var graph = _graph!;
+            if (_coverageRestorePending)
+            {
+                _coverageRestorePending = false;
+                await SendCoverageAsync(graph);
+            }
 
             ExclusionSet exclusions;
             lock (_lock) exclusions = _exclusions;
@@ -289,6 +308,7 @@ public sealed class EngineCore(
 
             var stale = _results.MarkStale(plan.Stale);
             if (stale.Count > 0) await events.TestResults(stale);
+            if (_coverage.MarkStale(plan.Stale)) await SendCoverageAsync(graph);
             await events.StateChanged(EngineState.Building, plan.Build.Count);
             var outcomes = await build.BuildAsync(graph.InBuildOrder(plan.Build),
                 p => events.ProjectBuildStarted(p.RepoRelativePath),
@@ -322,16 +342,16 @@ public sealed class EngineCore(
             await events.StateChanged(EngineState.Testing, runnable.Count);
             if (MaxParallelTestProjects <= 1)
             {
-                foreach (var p in runnable) await RunProjectAsync(p, plan, snap.ManualKeys, progress, ct);
+                foreach (var p in runnable) await RunProjectAsync(p, graph, plan, snap.ManualKeys, progress, ct);
             }
             else
             {
                 await Parallel.ForEachAsync(runnable, new ParallelOptions { MaxDegreeOfParallelism = MaxParallelTestProjects, CancellationToken = ct },
-                    async (p, token) => await RunProjectAsync(p, plan, snap.ManualKeys, progress, token));
+                    async (p, token) => await RunProjectAsync(p, graph, plan, snap.ManualKeys, progress, token));
             }
             ct.ThrowIfCancellationRequested();
 
-            try { store.Save(_results.All()); }
+            try { store.Save(_results.All()); coverageStore?.Save(_coverage.All()); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 // The results already reached the client; rerunning the cycle would not make the disk writable.
@@ -395,8 +415,54 @@ public sealed class EngineCore(
     }
 
     /// <param name="manualKeys">The tests the user asked to run; their results are tagged <see cref="RunKind.Manual"/>.</param>
-    private async Task RunProjectAsync(ProjectInfo project, CyclePlan plan, IReadOnlySet<string> manualKeys,
+    private async Task RunProjectAsync(ProjectInfo project, ProjectGraph graph, CyclePlan plan, IReadOnlySet<string> manualKeys,
         CycleProgress progress, CancellationToken ct)
+    {
+        var coverage = await StartCoverageAsync(project, graph, plan, ct);
+        try
+        {
+            await RunProjectCoreAsync(project, graph, plan, manualKeys, progress, coverage, ct);
+        }
+        finally
+        {
+            if (coverage is not null) await coverage.DisposeAsync();
+        }
+    }
+
+    /// <summary>A coverage run for the project, or null (coverage off, unavailable, or the project can't be covered, or only some of its tests run).</summary>
+    private async Task<ICoverageRun?> StartCoverageAsync(ProjectInfo project, ProjectGraph graph, CyclePlan plan, CancellationToken ct)
+    {
+        // A manual-only run covers just the tests asked for: that is not a pass over the whole project.
+        if (coverageRuns is null || plan.ManualOnly.Contains(project.RepoRelativePath)) return null;
+        try
+        {
+            return await coverageRuns.StartAsync(project, graph, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await events.Log("warning", $"Coverage skipped for {project.RepoRelativePath}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Sends the complete current line states to the client, with absolute repo paths.</summary>
+    private async Task SendCoverageAsync(ProjectGraph graph)
+    {
+        await _coverageSend.WaitAsync();
+        try
+        {
+            var markup = _coverage.Markup(file => graph.OwnersOf(file),
+                production => graph.WithDependents([production]).Where(t => graph.Find(t)?.IsTestProject == true).ToHashSet(StringComparer.Ordinal));
+            await events.CoverageUpdated(markup.Select(m => m with { Path = map.RepoPath(m.Path) }).ToList());
+        }
+        finally
+        {
+            _coverageSend.Release();
+        }
+    }
+
+    private async Task RunProjectCoreAsync(ProjectInfo project, ProjectGraph graph, CyclePlan plan, IReadOnlySet<string> manualKeys,
+        CycleProgress progress, ICoverageRun? coverage, CancellationToken ct)
     {
         var first = true;
         var manualOnly = plan.ManualOnly.Contains(project.RepoRelativePath);
@@ -419,13 +485,18 @@ public sealed class EngineCore(
                     else await events.TestsDiscovered(project.RepoRelativePath, discovered);
                 }
                 else await events.TestResults(run.Updated(raw));
-            }, ct);
+            }, ct, coverage);
         if (!ct.IsCancellationRequested && outcome.Status == ProjectRunStatus.Completed && run.SettleTheories() is { } all)
             await events.TestsDiscovered(project.RepoRelativePath, all);
         if (!ct.IsCancellationRequested && outcome.Status == ProjectRunStatus.Crashed)
         {
             var settled = run.SettleCrash(outcome.Error);
             if (settled.Count > 0) await events.TestResults(settled);
+        }
+        if (!ct.IsCancellationRequested && outcome.Status == ProjectRunStatus.Completed && coverage?.Pass is { } pass)
+        {
+            _coverage.Replace(pass);
+            await SendCoverageAsync(graph);
         }
         if (!ct.IsCancellationRequested) await events.ProjectRunFinished(outcome);
         if (!ct.IsCancellationRequested && outcome.Status != ProjectRunStatus.Cancelled)

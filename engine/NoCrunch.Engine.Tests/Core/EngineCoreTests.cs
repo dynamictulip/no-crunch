@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using NoCrunch.Engine.Build;
 using NoCrunch.Engine.Core;
+using NoCrunch.Engine.Coverage;
 using NoCrunch.Engine.Graph;
 using NoCrunch.Engine.Layout;
 using NoCrunch.Engine.Testing;
@@ -139,6 +140,10 @@ public class EngineCoreTests
         public ConcurrentQueue<TestResultUpdate> Results { get; } = new();
         public ConcurrentQueue<ProjectRunOutcome> RunsFinished { get; } = new();
         public ConcurrentQueue<(string project, int count)> Discoveries { get; } = new();
+        public ConcurrentQueue<IReadOnlyList<FileMarkup>> CoverageUpdates { get; } = new();
+        public ConcurrentQueue<CoverageAvailability> CoverageStatuses { get; } = new();
+        public Task CoverageUpdated(IReadOnlyList<FileMarkup> files) { CoverageUpdates.Enqueue(files); return Task.CompletedTask; }
+        public Task CoverageStatus(CoverageAvailability availability) { CoverageStatuses.Enqueue(availability); return Task.CompletedTask; }
         private int _idle;
         public SemaphoreSlim IdleSignal { get; } = new(0);
 
@@ -180,16 +185,21 @@ public class EngineCoreTests
         public Func<CancellationToken, Task> Gate { get; set; } = _ => Task.CompletedTask;
     }
 
-    private static async Task<Harness> CreateAsync(Action<FakeBuild>? configureBuild = null, ResultStore? store = null, bool start = true)
+    private static async Task<Harness> CreateAsync(Action<FakeBuild>? configureBuild = null, ResultStore? store = null, bool start = true,
+        ICoverageRunFactory? coverage = null, CoverageStore? coverageStore = null, ProjectInfo[]? extraProjects = null)
     {
         var root = TempDir.Create();
         File.WriteAllText(Path.Combine(root, "S.slnx"), "");
         var layout = RepoLayout.Resolve(Path.Combine(root, "S.slnx"));
         var query = new ProjectGraphTests.FakeQuery(
-            ProjectGraphTests.P(Core, items: ["src/Core/Calc.cs"]),
-            ProjectGraphTests.P(CoreTests, test: true, refs: [Core], items: ["tests/Core.Tests/CalcTests.cs"]),
-            ProjectGraphTests.P(Other, test: true, items: ["tests/Other.Tests/OtherTests.cs"]),
-            ProjectGraphTests.P(Legacy, test: true) with { IsMtp = false });
+            [.. new[]
+            {
+                ProjectGraphTests.P(Core, items: ["src/Core/Calc.cs"]),
+                ProjectGraphTests.P(CoreTests, test: true, refs: [Core], items: ["tests/Core.Tests/CalcTests.cs"]),
+                ProjectGraphTests.P(Other, test: true, items: ["tests/Other.Tests/OtherTests.cs"]),
+                ProjectGraphTests.P(Legacy, test: true) with { IsMtp = false },
+            }, .. extraProjects ?? []]);
+
         var ws = new FakeWorkspace { OnSync = paths => paths.Select(p => Path.GetRelativePath(root, p).Replace('\\', '/')).ToList() };
         var build = new FakeBuild();
         configureBuild?.Invoke(build);
@@ -198,7 +208,7 @@ public class EngineCoreTests
         store ??= new ResultStore(Path.Combine(layout.StateDir, "results.json"));
         var gate = new GraphGate();
         var core = new EngineCore(ws, async ct => { await gate.Gate(ct); return await ProjectGraph.LoadAsync(layout, query, ct); }, build, tests, store, events,
-            new PathMap(layout.RepoRoot, layout.MirrorRoot), layout.SolutionPath)
+            new PathMap(layout.RepoRoot, layout.MirrorRoot), layout.SolutionPath, coverage, coverageStore)
         {
             Debounce = TimeSpan.FromMilliseconds(80),
             MaxParallelTestProjects = 2,
@@ -901,5 +911,173 @@ public class EngineCoreTests
         var h = await CreateAsync();
         var saved = h.Store.Load();
         Assert.AreEqual(TestState.Passed, saved[$"{CoreTests}|T|A"].State);
+    }
+
+    // ---- coverage ------------------------------------------------------------------------------------------
+
+    private const string CalcCs = "src/Core/Calc.cs";
+
+    private sealed class FakeCoverageRun(TestProjectPass? pass) : ICoverageRun
+    {
+        public string TargetPath => "/copy/app.dll";
+        public TestProjectPass? Pass => pass;
+        public volatile bool Disposed;
+        public Task ClassFinishedAsync(string testClass, IReadOnlyList<TestResultUpdate> results, CancellationToken ct) => Task.CompletedTask;
+        public Task FinishedAsync(RunAlone runAlone, CancellationToken ct) => Task.CompletedTask;
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
+    private sealed class FakeCoverageFactory : ICoverageRunFactory
+    {
+        public CoverageAvailability Availability { get; set; } = new(true, null);
+        public ConcurrentQueue<string> Started { get; } = new();
+        public ConcurrentBag<FakeCoverageRun> Runs { get; } = [];
+        public Func<ProjectInfo, TestProjectPass?> PassFor { get; set; } = _ => null;
+        public HashSet<string> Covered { get; } = [CoreTests];
+
+        public Task<CoverageAvailability> CheckAsync(CancellationToken ct) => Task.FromResult(Availability);
+
+        public Task<ICoverageRun?> StartAsync(ProjectInfo project, ProjectGraph graph, CancellationToken ct)
+        {
+            Started.Enqueue(project.RepoRelativePath);
+            if (!Covered.Contains(project.RepoRelativePath)) return Task.FromResult<ICoverageRun?>(null);
+            var run = new FakeCoverageRun(PassFor(project));
+            Runs.Add(run);
+            return Task.FromResult<ICoverageRun?>(run);
+        }
+    }
+
+    private static TestProjectPass CalcPass(string testProject = CoreTests) => new(
+        testProject,
+        [new ClassCoverage("T", new Dictionary<string, LineSet> { [CalcCs] = new(new HashSet<int> { 1, 2, 3 }, new HashSet<int> { 1, 2 }) })],
+        new Dictionary<string, IReadOnlySet<int>>(), new HashSet<string>(),
+        new Dictionary<string, string> { [CalcCs] = "h" }, new HashSet<string> { Core });
+
+    [TestMethod]
+    public async Task Start_reports_coverage_availability_once()
+    {
+        var factory = new FakeCoverageFactory { Availability = new CoverageAvailability(false, "install it") };
+
+        var h = await CreateAsync(coverage: factory);
+
+        var status = h.Events.CoverageStatuses.Single();
+        Assert.IsFalse(status.Available);
+        Assert.AreEqual("install it", status.Message);
+    }
+
+    [TestMethod]
+    public async Task A_successful_pass_is_merged_and_sent_as_complete_markup_with_absolute_repo_paths()
+    {
+        var factory = new FakeCoverageFactory { PassFor = _ => CalcPass() };
+
+        var h = await CreateAsync(coverage: factory);
+
+        var file = h.Events.CoverageUpdates.Last().Single();
+        Assert.AreEqual(Abs(h, CalcCs), file.Path);
+        Assert.IsFalse(file.Stale);
+        CollectionAssert.AreEqual(new[] { 1, 2 }, file.Passing.ToArray());
+        CollectionAssert.AreEqual(new[] { 3 }, file.NotCovered.ToArray());
+    }
+
+    [TestMethod]
+    public async Task A_failed_pass_changes_nothing_and_leaves_the_previous_markup_stale()
+    {
+        var factory = new FakeCoverageFactory { PassFor = _ => CalcPass() };
+        var h = await CreateAsync(coverage: factory);
+        factory.PassFor = _ => null;
+
+        h.Core.RunAll();
+        await h.Events.WaitIdleAsync();
+
+        var file = h.Events.CoverageUpdates.Last().Single();
+        Assert.IsTrue(file.Stale, "planning the cycle made the old coverage stale, and no new pass replaced it");
+        CollectionAssert.AreEqual(new[] { 1, 2 }, file.Passing.ToArray());
+    }
+
+    [TestMethod]
+    public async Task A_later_pass_replaces_stale_with_fresh()
+    {
+        var factory = new FakeCoverageFactory { PassFor = _ => CalcPass() };
+        var h = await CreateAsync(coverage: factory);
+
+        h.Core.RunAll();
+        await h.Events.WaitIdleAsync();
+
+        Assert.IsTrue(h.Events.CoverageUpdates.Any(u => u.Any(f => f.Stale)), "it went stale while the cycle ran");
+        Assert.IsFalse(h.Events.CoverageUpdates.Last().Single().Stale);
+    }
+
+    [TestMethod]
+    public async Task Coverage_run_is_disposed_even_when_the_cycle_is_cancelled()
+    {
+        var factory = new FakeCoverageFactory { PassFor = _ => CalcPass() };
+        var h = await CreateAsync(coverage: factory);
+        var running = new TaskCompletionSource();
+        h.Tests.RunGate = async (project, ct) =>
+        {
+            if (project != CoreTests) return;
+            running.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        };
+        var before = factory.Runs.Count;
+
+        h.Core.RunAll();
+        await running.Task.WaitAsync(Wait);
+        h.Core.Pause();
+
+        var deadline = DateTime.UtcNow + Wait;
+        while (factory.Runs.Count(r => r.Disposed) < factory.Runs.Count && DateTime.UtcNow < deadline) await Task.Delay(20);
+        Assert.IsTrue(factory.Runs.Count > before);
+        Assert.IsTrue(factory.Runs.All(r => r.Disposed), "every coverage run was disposed");
+    }
+
+    [TestMethod]
+    public async Task Persisted_coverage_is_restored_stale_and_sent_once_the_graph_is_known()
+    {
+        var root = TempDir.Create();
+        var coverageStore = new CoverageStore(Path.Combine(root, "coverage.json"));
+        coverageStore.Save([CalcPass()]);
+
+        var h = await CreateAsync(coverage: new FakeCoverageFactory(), coverageStore: coverageStore);
+
+        var first = h.Events.CoverageUpdates.First().Single();
+        Assert.IsTrue(first.Stale, "restored coverage is stale until a pass replaces it");
+        CollectionAssert.AreEqual(new[] { 1, 2 }, first.Passing.ToArray());
+    }
+
+    [TestMethod]
+    public async Task Coverage_is_saved_with_the_results()
+    {
+        var root = TempDir.Create();
+        var coverageStore = new CoverageStore(Path.Combine(root, "coverage.json"));
+
+        await CreateAsync(coverage: new FakeCoverageFactory { PassFor = _ => CalcPass() }, coverageStore: coverageStore);
+
+        Assert.AreEqual(CoreTests, coverageStore.Load().Single().TestProject);
+    }
+
+    [TestMethod]
+    public async Task Without_a_coverage_factory_nothing_is_sent()
+    {
+        var h = await CreateAsync();
+
+        Assert.AreEqual(0, h.Events.CoverageUpdates.Count);
+        Assert.AreEqual(0, h.Events.CoverageStatuses.Count);
+    }
+
+    [TestMethod]
+    public async Task Not_covered_is_withheld_for_assemblies_referenced_by_a_test_project_without_a_pass()
+    {
+        const string More = "tests/More.Tests/More.Tests.csproj";
+        var factory = new FakeCoverageFactory { PassFor = _ => CalcPass() };   // More.Tests is never covered: no run for it
+        var h = await CreateAsync(start: false, coverage: factory, extraProjects: [ProjectGraphTests.P(More, test: true, refs: [Core])]);
+        h.Tests.Tests[More] = [("M", TestState.Passed)];
+
+        await h.Core.StartAsync(CancellationToken.None);
+        await h.Events.WaitIdleAsync();
+
+        var file = h.Events.CoverageUpdates.Last().Single();
+        Assert.AreEqual(0, file.NotCovered.Count, "More.Tests covers Core but has no pass, so line 3 is unknown, not uncovered");
+        CollectionAssert.AreEqual(new[] { 1, 2 }, file.Passing.ToArray());
     }
 }
