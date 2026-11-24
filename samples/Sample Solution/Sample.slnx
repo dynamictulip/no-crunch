@@ -7,7 +7,9 @@
     <Project Path="tests/Shop.Catalog.Tests/Shop.Catalog.Tests.csproj" />
     <Project Path="tests/Shop.Core.Tests/Shop.Core.Tests.csproj" />
     <Project Path="tests/Shop.E2E.Tests/Shop.E2E.Tests.csproj" />
+    <Project Path="tests/Shop.NUnit.Tests/Shop.NUnit.Tests.csproj" />
     <Project Path="tests/Shop.Other.Tests/Shop.Other.Tests.csproj" />
     <Project Path="tests/Shop.Theory.Tests/Shop.Theory.Tests.csproj" />
+    <Project Path="tests/Shop.Xunit.Tests/Shop.Xunit.Tests.csproj" />
   </Folder>
 </Solution>
