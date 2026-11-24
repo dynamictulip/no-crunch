@@ -5,6 +5,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.editor.event.EditorFactoryListener
@@ -52,6 +54,10 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
                 lastLayout.remove(event.editor)
             }
         }, this)
+        // Typing or saving changes the text the coverage was hashed from: repaint so its dots turn stale at once.
+        EditorFactory.getInstance().eventMulticaster.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(event: DocumentEvent) = refreshSoon()
+        }, this)
         scope.launch(Dispatchers.Default) {
             NoCrunchResults.getInstance(project).snapshots
                 .map { snapshot ->
@@ -74,6 +80,18 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
         return path.startsWith("$root/") && !path.startsWith("$root/.nocrunch/") && File(path).isFile
     }
 
+    private val refreshQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** [refresh], once for any burst of edits. */
+    private fun refreshSoon() {
+        if (refreshQueued.compareAndSet(false, true)) {
+            ApplicationManager.getApplication().invokeLater({
+                refreshQueued.set(false)
+                refresh()
+            }, project.disposed)
+        }
+    }
+
     /** Repaints every open editor of the project from the current markers. */
     fun refresh() {
         ApplicationManager.getApplication().invokeLater({
@@ -91,7 +109,8 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
         val text = editor.document.immutableCharSequence
         val covered = coverageFor(text, coverage[path])?.let(EditorMarkers::coverageMarkers).orEmpty()
         val layout = layout(text, markers[path].orEmpty() + covered)
-        if (lastLayout[editor] == layout) return
+        // Rider drops highlighters when it reloads a document from disk: an unchanged layout isn't enough to skip.
+        if (lastLayout[editor] == layout && painted[editor].orEmpty().all { it.isValid }) return
         clear(editor)
         painted[editor] = layout.map { (line, marker) ->
             editor.markupModel.addLineHighlighter(null, line, HighlighterLayer.ADDITIONAL_SYNTAX).also {
