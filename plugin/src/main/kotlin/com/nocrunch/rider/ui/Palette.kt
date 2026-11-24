@@ -22,9 +22,15 @@ object Palette {
     /** The stock failed-test icon's red, looked up each time it is used so a theme change takes effect. */
     val FAIL: JBColor = JBColor.lazy { StockIconColour.failedTestRed() ?: FAIL_FALLBACK }
 
+    /** Lines no test covers: a neutral grey, so it is the shape (a dash) that says it, not a hue. */
+    val NOT_COVERED: JBColor = JBColor(Color(0x7D828C), Color(0x9DA0A8))
+
     /** Same colour, see-through: for results from an earlier run (stale). */
     fun faded(c: Color): Color = ColorUtil.withAlpha(c, 0.55)
 
     /** [faded] for a theme-aware colour: stays theme-aware. */
     fun faded(c: JBColor): JBColor = JBColor.lazy { ColorUtil.withAlpha(c, 0.55) }
+
+    /** [NOT_COVERED] for a line whose coverage is from before the latest edits. */
+    val NOT_COVERED_STALE: JBColor = faded(NOT_COVERED)
 }

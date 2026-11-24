@@ -10,8 +10,8 @@ import java.awt.geom.Path2D
 import javax.swing.Icon
 
 /**
- * A gutter marker. The shape says what happened (circle passing, diamond failing, cross the cause of a failure) and
- * hollow means the result is stale, so the meaning never rests on colour alone. Drawn in code so it scales with the display.
+ * A gutter marker. The shape says what happened (circle passing, diamond failing, cross the cause of a failure, dash
+ * not covered) and hollow (or, for the dash, faded) means the result is stale, so the meaning never rests on colour alone. Drawn in code so it scales with the display.
  */
 class MarkerIcon(private val kind: MarkerKind) : Icon {
     private val size get() = JBUI.scale(SIZE)
@@ -28,6 +28,8 @@ class MarkerIcon(private val kind: MarkerKind) : Icon {
             val u = size / SIZE.toDouble()
             g2.color = when (kind) {
                 MarkerKind.PASS, MarkerKind.PASS_STALE -> Palette.PASS
+                MarkerKind.NOT_COVERED -> Palette.NOT_COVERED
+                MarkerKind.NOT_COVERED_STALE -> Palette.NOT_COVERED_STALE
                 else -> Palette.FAIL
             }
             when (kind) {
@@ -41,6 +43,8 @@ class MarkerIcon(private val kind: MarkerKind) : Icon {
                     g2.stroke = BasicStroke((1.5 * u).toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
                     g2.draw(diamond(u, 2.25))
                 }
+                MarkerKind.NOT_COVERED, MarkerKind.NOT_COVERED_STALE ->
+                    g2.fill(java.awt.geom.RoundRectangle2D.Double(2.5 * u, 6 * u, 9 * u, 2 * u, 2 * u, 2 * u))
                 MarkerKind.CAUSE -> {
                     g2.stroke = BasicStroke((3 * u).toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
                     g2.draw(java.awt.geom.Line2D.Double(3 * u, 3 * u, 11 * u, 11 * u))

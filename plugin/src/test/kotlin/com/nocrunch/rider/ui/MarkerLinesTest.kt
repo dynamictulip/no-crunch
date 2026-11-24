@@ -47,4 +47,14 @@ class MarkerLinesTest {
         val markers = listOf(LineMarker(0, MarkerKind.PASS, "t", method = "Total_works"))
         assertEquals(layout(text, markers), layout(text, markers.toList()))
     }
+
+    @Test
+    fun a_coverage_marker_loses_to_a_cause_or_test_marker_on_the_same_line() {
+        val cause = LineMarker(1, MarkerKind.CAUSE, "Cause of failure: boom")
+        val dash = LineMarker(1, MarkerKind.NOT_COVERED, "Not covered by any test")
+        val pass = LineMarker(1, MarkerKind.PASS, "Hit only by passing tests")
+
+        assertEquals(mapOf(1 to cause), layout(text, listOf(dash, cause)))
+        assertEquals(mapOf(1 to pass), layout(text, listOf(dash, pass)))
+    }
 }

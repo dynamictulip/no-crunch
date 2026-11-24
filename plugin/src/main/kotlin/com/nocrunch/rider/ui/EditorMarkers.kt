@@ -1,10 +1,14 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.engine.CoverageFileDto
 import com.nocrunch.rider.engine.TestResultDto
 import com.nocrunch.rider.engine.TestState
 
-/** What a gutter marker shows. Declaration order is precedence when several land on one line: best (first) wins. */
-enum class MarkerKind { CAUSE, FAIL, FAIL_STALE, PASS, PASS_STALE }
+/**
+ * What a gutter marker shows. Declaration order is precedence when several land on one line: best (first) wins, so a
+ * coverage dash never hides a test or failure marker.
+ */
+enum class MarkerKind { CAUSE, FAIL, FAIL_STALE, PASS, PASS_STALE, NOT_COVERED, NOT_COVERED_STALE }
 
 /**
  * A marker for one editor line. [line] is 0-based. [method] is the test method's name for a marker on a test, so the
@@ -31,6 +35,19 @@ object EditorMarkers {
             add(file, causeMarker(line, r))
         }
         return byLine.entries.groupBy({ it.key.first }, { it.value }).mapValues { (_, markers) -> markers.sortedBy { it.line } }
+    }
+
+    /**
+     * Markers for the line coverage of one source file: a circle where only passing tests ran the line, a diamond where
+     * a failing test did, a dash where none did. Stale data gives the stale variants. Lines are 0-based, sorted.
+     */
+    fun coverageMarkers(file: CoverageFileDto): List<LineMarker> {
+        val stale = file.stale
+        fun tip(text: String) = if (stale) "$text, stale" else text
+        val passing = file.passing.map { LineMarker(it - 1, if (stale) MarkerKind.PASS_STALE else MarkerKind.PASS, tip("Hit only by passing tests")) }
+        val failing = file.failing.map { LineMarker(it - 1, if (stale) MarkerKind.FAIL_STALE else MarkerKind.FAIL, tip("Hit by failing tests")) }
+        val notCovered = file.notCovered.map { LineMarker(it - 1, if (stale) MarkerKind.NOT_COVERED_STALE else MarkerKind.NOT_COVERED, tip("Not covered by any test")) }
+        return (passing + failing + notCovered).sortedBy { it.line }
     }
 
     private val STACK_FRAME = Regex("""in (/[^\n]+?):line (\d+)""")

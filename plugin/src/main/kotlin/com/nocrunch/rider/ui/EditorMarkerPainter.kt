@@ -14,6 +14,7 @@ import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.project.Project
 import com.nocrunch.rider.NoCrunchService
+import com.nocrunch.rider.engine.CoverageFileDto
 import com.nocrunch.rider.settings.NoCrunchSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +31,9 @@ import javax.swing.Icon
 class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) : Disposable {
     /** The latest markers per file path, worked out off the EDT whenever results change. */
     @Volatile private var markers: Map<String, List<LineMarker>> = emptyMap()
+
+    /** The engine's latest line coverage per file path; only painted on a file whose open text still matches it. */
+    @Volatile private var coverage: Map<String, CoverageFileDto> = emptyMap()
 
     /** Highlighters this painter added, per editor. Touched on the EDT only. */
     private val painted = HashMap<Editor, List<RangeHighlighter>>()
@@ -53,10 +57,11 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
                 .map { snapshot ->
                     // Stack frames repeat across failures: check the disk once per file, not once per frame.
                     val isRepoFile = memoized(::isRepoFile)
-                    EditorMarkers.compute(snapshot.tests.values, isRepoFile)
+                    EditorMarkers.compute(snapshot.tests.values, isRepoFile) to snapshot.coverage
                 }
-                .collect {
-                    markers = it
+                .collect { (computed, coverageNow) ->
+                    markers = computed
+                    coverage = coverageNow
                     refresh()
                 }
         }
@@ -83,7 +88,9 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
         }
         // The editor's file isn't always set the moment the editor is created; the document knows it.
         val path = (editor.virtualFile ?: FileDocumentManager.getInstance().getFile(editor.document))?.path ?: return
-        val layout = layout(editor.document.immutableCharSequence, markers[path].orEmpty())
+        val text = editor.document.immutableCharSequence
+        val covered = coverageFor(text, coverage[path])?.let(EditorMarkers::coverageMarkers).orEmpty()
+        val layout = layout(text, markers[path].orEmpty() + covered)
         if (lastLayout[editor] == layout) return
         clear(editor)
         painted[editor] = layout.map { (line, marker) ->
@@ -116,6 +123,13 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
         fun getInstance(project: Project): EditorMarkerPainter = project.service()
     }
 }
+
+/**
+ * The coverage to paint on a file whose open [text] is given, or null if there is none or the text no longer matches the
+ * file the engine collected it against (edited since: line numbers would be wrong, so show nothing).
+ */
+fun coverageFor(text: CharSequence, file: CoverageFileDto?): CoverageFileDto? =
+    file?.takeIf { it.hash == ContentHash.of(text) }
 
 /**
  * The 0-based line to paint [marker] on. A test's reported line is often an attribute like `[TestMethod]`, so a marker

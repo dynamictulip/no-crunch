@@ -15,7 +15,10 @@ class MarkerIconTest {
     @Test
     fun precedence_follows_declaration_order() {
         assertEquals(
-            listOf(MarkerKind.CAUSE, MarkerKind.FAIL, MarkerKind.FAIL_STALE, MarkerKind.PASS, MarkerKind.PASS_STALE),
+            listOf(
+                MarkerKind.CAUSE, MarkerKind.FAIL, MarkerKind.FAIL_STALE, MarkerKind.PASS, MarkerKind.PASS_STALE,
+                MarkerKind.NOT_COVERED, MarkerKind.NOT_COVERED_STALE,
+            ),
             MarkerKind.entries,
         )
     }

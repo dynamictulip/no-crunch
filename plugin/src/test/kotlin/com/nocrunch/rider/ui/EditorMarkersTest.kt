@@ -1,5 +1,6 @@
 package com.nocrunch.rider.ui
 
+import com.nocrunch.rider.engine.CoverageFileDto
 import com.nocrunch.rider.engine.TestResultDto
 import com.nocrunch.rider.engine.TestState
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -163,5 +164,47 @@ class EditorMarkersTest {
         assertTrue(cached("/repo/A.cs"))
         assertEquals(false, cached("/repo/B.txt"))
         assertEquals(2, calls)
+    }
+
+    private fun coverage(stale: Boolean = false) = CoverageFileDto(
+        path = "/repo/src/Order.cs", hash = "h", stale = stale, notCovered = listOf(5), passing = listOf(1, 2), failing = listOf(3),
+    )
+
+    @Test
+    fun coverage_markers_map_states_to_kinds_and_zero_based_lines() {
+        assertEquals(
+            listOf(
+                LineMarker(0, MarkerKind.PASS, "Hit only by passing tests"),
+                LineMarker(1, MarkerKind.PASS, "Hit only by passing tests"),
+                LineMarker(2, MarkerKind.FAIL, "Hit by failing tests"),
+                LineMarker(4, MarkerKind.NOT_COVERED, "Not covered by any test"),
+            ),
+            EditorMarkers.coverageMarkers(coverage()),
+        )
+    }
+
+    @Test
+    fun stale_coverage_gives_stale_kinds() {
+        assertEquals(
+            listOf(MarkerKind.PASS_STALE, MarkerKind.PASS_STALE, MarkerKind.FAIL_STALE, MarkerKind.NOT_COVERED_STALE),
+            EditorMarkers.coverageMarkers(coverage(stale = true)).map { it.kind },
+        )
+        assertEquals("Not covered by any test, stale", EditorMarkers.coverageMarkers(coverage(stale = true)).last().tooltip)
+    }
+
+    @Test
+    fun coverage_is_used_only_when_its_hash_matches_the_document() {
+        val file = coverage().copy(hash = ContentHash.of("a\nb\n"))
+
+        assertEquals(file, coverageFor("a\nb\n", file))
+        assertEquals(null, coverageFor("a\nb changed\n", file))
+        assertEquals(null, coverageFor("a\nb\n", null))
+    }
+
+    @Test
+    fun a_crlf_document_matches_coverage_hashed_from_lf_text() {
+        val file = coverage().copy(hash = ContentHash.of("a\nb\n"))
+
+        assertEquals(file, coverageFor("a\r\nb\n", file))
     }
 }
