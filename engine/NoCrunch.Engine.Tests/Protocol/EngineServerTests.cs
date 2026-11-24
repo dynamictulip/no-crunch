@@ -33,7 +33,7 @@ public class EngineServerTests
         public Task<IReadOnlyDictionary<string, BuildOutcome>> BuildAsync(IReadOnlyList<ProjectInfo> inOrder,
             Func<ProjectInfo, Task>? onStarted, Func<BuildOutcome, Task>? onFinished, CancellationToken ct) => throw new NotSupportedException();
         public Task<ProjectRunOutcome> RunAsync(ProjectInfo project, Func<TestId, bool> shouldRun,
-            Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct) => throw new NotSupportedException();
+            Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct, NoCrunch.Engine.Coverage.ICoverageRun? coverage = null) => throw new NotSupportedException();
     }
 
     private sealed class Events(bool failResults) : IEngineEvents

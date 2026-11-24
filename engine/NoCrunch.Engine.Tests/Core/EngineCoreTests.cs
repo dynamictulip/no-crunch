@@ -110,7 +110,7 @@ public class EngineCoreTests
         public string? CrashWhileRunning { get; set; }
 
         public async Task<ProjectRunOutcome> RunAsync(ProjectInfo project, Func<TestId, bool> shouldRun,
-            Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct)
+            Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct, NoCrunch.Engine.Coverage.ICoverageRun? coverage = null)
         {
             Runs.Enqueue(project.RepoRelativePath);
             var ids = Tests[project.RepoRelativePath].Select(t => (id: new TestId(project.RepoRelativePath, "T", t.method, t.method), t.state)).ToList();

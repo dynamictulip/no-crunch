@@ -38,8 +38,9 @@ public interface ITestStep
 {
     /// <summary>
     /// Runs one test project. The first <paramref name="onUpdates"/> batch must be the complete discovered list
-    /// (Queued or Excluded); later batches are state changes.
+    /// (Queued or Excluded); later batches are state changes. With <paramref name="coverage"/> the tests run class by
+    /// class on one host started from the coverage run's instrumented copy.
     /// </summary>
     Task<ProjectRunOutcome> RunAsync(ProjectInfo project, Func<TestId, bool> shouldRun,
-        Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct);
+        Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates, CancellationToken ct, ICoverageRun? coverage = null);
 }

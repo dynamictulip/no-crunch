@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using Microsoft.Testing.Platform.ServerMode.Client;
 using Microsoft.Testing.Platform.ServerMode.Client.Protocol.ServerMode;
+using NoCrunch.Engine.Coverage;
 using NoCrunch.Engine.Graph;
 using NoCrunch.Engine.Layout;
 
@@ -19,6 +20,9 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
     /// <summary>MTP's exit code for "incompatible protocol version".</summary>
     private const int IncompatibleProtocolVersionExitCode = 12;
 
+    /// <summary>Longest a single coverage call (a snapshot after a class) may take before it is abandoned.</summary>
+    private static readonly TimeSpan CoverageCallTimeout = TimeSpan.FromMinutes(5);
+
     /// <summary>How long to wait for a test host that hung up during the handshake to exit, so its exit code can be read.</summary>
     private static readonly TimeSpan HandshakeExitWait = TimeSpan.FromSeconds(2);
 
@@ -26,7 +30,8 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
         ProjectInfo project,
         Func<TestId, bool> shouldRun,
         Func<IReadOnlyList<TestResultUpdate>, Task> onUpdates,
-        CancellationToken ct)
+        CancellationToken ct,
+        ICoverageRun? coverage = null)
     {
         var name = project.RepoRelativePath;
         if (ct.IsCancellationRequested) return new ProjectRunOutcome(name, ProjectRunStatus.Cancelled, null);
@@ -53,7 +58,7 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
             }
             updates.Writer.TryWrite(initial);
 
-            var timedOut = queued.Count > 0 ? await ExecuteAsync(project, queued, renamed, updates.Writer, ct) : null;
+            var timedOut = queued.Count > 0 ? await ExecuteAsync(project, queued, renamed, updates.Writer, coverage, ct) : null;
             // A timed-out run still ends normally: every test it was asked to run now has a result (the unfinished
             // ones failed), and the error says why the test host was stopped.
             return new ProjectRunOutcome(name, ProjectRunStatus.Completed, timedOut);
@@ -118,7 +123,7 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
     private async Task<List<TestResultUpdate>> DiscoverAsync(ProjectInfo project, CancellationToken ct)
     {
         var found = new Dictionary<string, TestResultUpdate>(StringComparer.Ordinal);
-        await WithClientAsync(project, async client =>
+        await WithClientAsync(project.TargetPath!, async client =>
         {
             client.TestNodesUpdated += (_, e) =>
             {
@@ -136,7 +141,8 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
     /// for the test timeout: then its test host has been stopped and its unfinished tests reported as failed.
     /// </summary>
     private async Task<string?> ExecuteAsync(ProjectInfo project, IReadOnlyList<TestResultUpdate> queued,
-        IReadOnlyDictionary<string, Renamed> renamed, ChannelWriter<IReadOnlyList<TestResultUpdate>> writer, CancellationToken ct)
+        IReadOnlyDictionary<string, Renamed> renamed, ChannelWriter<IReadOnlyList<TestResultUpdate>> writer,
+        ICoverageRun? coverage, CancellationToken ct)
     {
         var gate = new object();
         var stopped = false;
@@ -144,6 +150,9 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
         var latest = new Dictionary<string, TestResultUpdate>(StringComparer.Ordinal);
         foreach (var q in queued) latest[q.Id.Key] = q;
         var reportedUids = new HashSet<string>(StringComparer.Ordinal);
+        // While a failing test is rerun alone for coverage, its updates are kept here instead of being reported.
+        string? aloneUid = null;
+        var aloneStates = new Dictionary<string, TestState>(StringComparer.Ordinal);
         using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // (Re)starts the inactivity timer. Only call under gate while not stopped (the source is disposed after that).
         void Arm()
@@ -153,7 +162,7 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
 
         try
         {
-            await WithClientAsync(project, async client =>
+            await WithClientAsync(coverage?.TargetPath ?? project.TargetPath!, async client =>
             {
                 client.TestNodesUpdated += (_, e) =>
                 {
@@ -166,6 +175,13 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
                         {
                             if (!IsTest(change) || change.Uid is null) continue;
                             if (change.Node.TryGetValue("retry.is-superseded", out var superseded) && superseded is true) continue;
+                            if (aloneUid is not null && change.Uid == aloneUid)
+                            {
+                                // A rerun for coverage: remember the outcome (a failing row makes the test failed), report nothing.
+                                var rerun = change.ExecutionState switch { "passed" => TestState.Passed, "skipped" => TestState.Skipped, "discovered" or "in-progress" or null => (TestState?)null, _ => TestState.Failed };
+                                if (rerun is { } rerunState && (!aloneStates.TryGetValue(aloneUid, out var seen) || seen != TestState.Failed)) aloneStates[aloneUid] = rerunState;
+                                continue;
+                            }
                             var state = change.ExecutionState switch
                             {
                                 "discovered" or null => (TestState?)null,
@@ -187,7 +203,50 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
                     }
                 };
                 lock (gate) Arm();
-                await client.RunTestsAsync(queued.Select(q => q.Id.Uid).Distinct(StringComparer.Ordinal).ToList(), watchdog.Token);
+                if (coverage is null)
+                {
+                    await client.RunTestsAsync(queued.Select(q => q.Id.Uid).Distinct(StringComparer.Ordinal).ToList(), watchdog.Token);
+                    return;
+                }
+
+                // With coverage: one class at a time on this host, a snapshot after each, then failing tests alone.
+                foreach (var slice in queued.GroupBy(q => q.Id.Type ?? "").ToList())
+                {
+                    await client.RunTestsAsync(slice.Select(q => q.Id.Uid).Distinct(StringComparer.Ordinal).ToList(), watchdog.Token);
+                    List<TestResultUpdate> results;
+                    lock (gate) results = latest.Values.Where(r => (r.Id.Type ?? "") == slice.Key && r.IsOutcome).ToList();
+                    await CoverageCallAsync(token => coverage.ClassFinishedAsync(slice.Key.Length == 0 ? "(no class)" : slice.Key, results, token));
+                }
+                lock (gate) Arm();
+                await coverage.FinishedAsync(async (test, _) =>
+                {
+                    lock (gate) { aloneUid = test.Id.Uid; aloneStates.Remove(test.Id.Uid); }
+                    try { await client.RunTestsAsync([test.Id.Uid], watchdog.Token); }
+                    finally { lock (gate) aloneUid = null; }
+                    lock (gate)
+                    {
+                        Arm();
+                        return aloneStates.TryGetValue(test.Id.Uid, out var state) ? state : throw new InvalidOperationException("The rerun reported no result.");
+                    }
+                }, ct);
+                lock (gate) Arm();
+
+                // The test-timeout watchdog is paused while the coverage run works (a snapshot reports nothing), but a
+                // hung coverage call is still cut off after CoverageCallTimeout, or at once if the run is cancelled.
+                async Task CoverageCallAsync(Func<CancellationToken, Task> call)
+                {
+                    lock (gate) watchdog.CancelAfter(Timeout.InfiniteTimeSpan);
+                    try
+                    {
+                        using var cap = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        cap.CancelAfter(CoverageCallTimeout);
+                        await call(cap.Token);
+                    }
+                    finally
+                    {
+                        lock (gate) Arm();
+                    }
+                }
             }, ct);
             return null;
         }
@@ -220,11 +279,11 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
         }
     }
 
-    private static async Task WithClientAsync(ProjectInfo project, Func<IMtpServerClient, Task> body, CancellationToken ct)
+    private static async Task WithClientAsync(string targetPath, Func<IMtpServerClient, Task> body, CancellationToken ct)
     {
         var options = new MtpServerClientOptions { ClientName = "NoCrunch", IsStateful = false };
         options.EnvironmentVariables["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
-        using IMtpServerClient client = await MtpServerClient.LaunchAsync(project.TargetPath!, options, ct);
+        using IMtpServerClient client = await MtpServerClient.LaunchAsync(targetPath, options, ct);
         try
         {
             var caps = await InitializeAsync(client, ct);
