@@ -8,9 +8,11 @@ namespace NoCrunch.Engine.Tests.TestSupport;
 /// <summary>A temp copy of the sample with its mirror initialised and graph loaded.</summary>
 internal sealed record MirroredSample(RepoLayout Layout, PathMap Map, SharedMirrorWorkspace Workspace, ProjectGraph Graph)
 {
-    public static async Task<MirroredSample> CreateAsync()
+    /// <param name="mutateRepo">Changes the temp repo (given its root) before the mirror is made, e.g. to break a test.</param>
+    public static async Task<MirroredSample> CreateAsync(Action<string>? mutateRepo = null)
     {
         var repo = SampleSolution.CopyToTemp();
+        mutateRepo?.Invoke(repo);
         var layout = RepoLayout.Resolve(Path.Combine(repo, "Sample.slnx"));
         var map = new PathMap(layout.RepoRoot, layout.MirrorRoot);
         var ws = new SharedMirrorWorkspace(layout, map);
