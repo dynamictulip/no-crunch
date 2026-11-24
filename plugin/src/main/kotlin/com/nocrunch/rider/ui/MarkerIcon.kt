@@ -33,10 +33,10 @@ class MarkerIcon(private val kind: MarkerKind) : Icon {
                 else -> Palette.FAIL
             }
             when (kind) {
-                MarkerKind.PASS -> g2.fill(java.awt.geom.Ellipse2D.Double(2 * u, 2 * u, 10 * u, 10 * u))
+                MarkerKind.PASS -> g2.fill(java.awt.geom.Ellipse2D.Double(3.5 * u, 3.5 * u, 7 * u, 7 * u))
                 MarkerKind.PASS_STALE -> {
                     g2.stroke = BasicStroke((1.5 * u).toFloat())
-                    g2.draw(java.awt.geom.Ellipse2D.Double(2.75 * u, 2.75 * u, 8.5 * u, 8.5 * u))
+                    g2.draw(java.awt.geom.Ellipse2D.Double(4.25 * u, 4.25 * u, 5.5 * u, 5.5 * u))
                 }
                 MarkerKind.FAIL -> g2.fill(diamond(u, 1.5))
                 MarkerKind.FAIL_STALE -> {
