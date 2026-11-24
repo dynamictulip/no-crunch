@@ -10,7 +10,8 @@ public class CoverageStoreTests
 
     private static TestProjectPass Sample() => new(
         "tests/T1.csproj",
-        [new ClassCoverage("Ns.C", new Dictionary<string, LineSet> { ["src/A.cs"] = new(new HashSet<int> { 1, 2, 3 }, new HashSet<int> { 2 }) })],
+        [new ClassCoverage("Ns.C", new Dictionary<string, IReadOnlySet<int>> { ["src/A.cs"] = new HashSet<int> { 2 } })],
+        new Dictionary<string, IReadOnlySet<int>> { ["src/A.cs"] = new HashSet<int> { 1, 2, 3 } },
         new Dictionary<string, IReadOnlySet<int>> { ["src/A.cs"] = new HashSet<int> { 2 } },
         new HashSet<string> { "Ns.Bad" },
         new Dictionary<string, string> { ["src/A.cs"] = "abc" },
@@ -34,8 +35,8 @@ public class CoverageStoreTests
         CollectionAssert.AreEquivalent(new[] { 2 }, loaded.FailingHit["src/A.cs"].ToArray());
         var cls = loaded.Classes.Single();
         Assert.AreEqual("Ns.C", cls.TestClass);
-        CollectionAssert.AreEquivalent(new[] { 1, 2, 3 }, cls.Files["src/A.cs"].Executable.ToArray());
-        CollectionAssert.AreEquivalent(new[] { 2 }, cls.Files["src/A.cs"].Hit.ToArray());
+        CollectionAssert.AreEquivalent(new[] { 1, 2, 3 }, loaded.Executable["src/A.cs"].ToArray());
+        CollectionAssert.AreEquivalent(new[] { 2 }, cls.Files["src/A.cs"].ToArray());
     }
 
     [TestMethod]

@@ -135,13 +135,14 @@ fun coverageFor(text: CharSequence, file: CoverageFileDto?): CoverageFileDto? =
  * The 0-based line to paint [marker] on. A test's reported line is often an attribute like `[TestMethod]`, so a marker
  * with a method lands on the line of the method's name. Null when the line is past the end of [text] (the file changed).
  */
-fun landingLine(text: CharSequence, marker: LineMarker): Int? {
-    val lineCount = text.count { it == '\n' } + 1
+fun landingLine(text: CharSequence, marker: LineMarker, lineCount: Int = lineCountOf(text)): Int? {
     if (marker.line !in 0 until lineCount) return null
     val method = marker.method ?: return marker.line
     val offset = TestLocator.caretOffset(text, marker.line, method)
     return text.subSequence(0, offset).count { it == '\n' }
 }
+
+private fun lineCountOf(text: CharSequence) = text.count { it == '\n' } + 1
 
 /**
  * Where each marker is painted, by 0-based line. Markers that land on the same line (a test's own line and a failure's)
@@ -149,8 +150,10 @@ fun landingLine(text: CharSequence, marker: LineMarker): Int? {
  */
 fun layout(text: CharSequence, markers: List<LineMarker>): Map<Int, LineMarker> {
     val byLine = HashMap<Int, LineMarker>()
+    // Counted once: a covered file can carry thousands of markers, and rescanning the text for each would be quadratic.
+    val lineCount = lineCountOf(text)
     markers.forEach { marker ->
-        val line = landingLine(text, marker) ?: return@forEach
+        val line = landingLine(text, marker, lineCount) ?: return@forEach
         byLine.merge(line, marker) { old, new -> if (new.kind < old.kind) new else old }
     }
     return byLine

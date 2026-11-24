@@ -68,7 +68,54 @@ public class CoverageRunTests
         var cls = run.Pass!.Classes.Single();
         Assert.AreEqual("Ns.C", cls.TestClass);
         CollectionAssert.AreEqual(new[] { "src/Prod/A.cs" }, cls.Files.Keys.ToArray());
-        CollectionAssert.AreEquivalent(new[] { 1 }, cls.Files["src/Prod/A.cs"].Hit.ToArray());
+        CollectionAssert.AreEquivalent(new[] { 1 }, cls.Files["src/Prod/A.cs"].ToArray());
+        CollectionAssert.AreEquivalent(new[] { 1, 2 }, run.Pass.Executable["src/Prod/A.cs"].ToArray(), "executable lines are kept once per pass, not per class");
+    }
+
+    [TestMethod]
+    public async Task Executable_lines_are_stored_once_however_many_classes_report_them()
+    {
+        var env = new Env();
+        var a = env.MirrorFile("src/Prod/A.cs");
+        var run = env.Run(new FakeSession(Report((a, [1], [1, 2, 3])), Report((a, [2], [1, 2, 3])), Report((a, [3], [1, 2, 3]))));
+
+        foreach (var cls in new[] { "C1", "C2", "C3" }) await run.ClassFinishedAsync(cls, [Result("M", TestState.Passed)], CancellationToken.None);
+        await run.FinishedAsync(Unused, CancellationToken.None);
+
+        CollectionAssert.AreEquivalent(new[] { 1, 2, 3 }, run.Pass!.Executable["src/Prod/A.cs"].ToArray());
+        Assert.AreEqual(3, run.Pass.Classes.Count);
+        Assert.IsTrue(run.Pass.Classes.All(c => c.Files["src/Prod/A.cs"].Count == 1), "a class keeps only the lines it hit");
+    }
+
+    [TestMethod]
+    public async Task Failing_theory_rows_sharing_a_uid_are_rerun_once()
+    {
+        var env = new Env();
+        var a = env.MirrorFile("src/Prod/A.cs");
+        var run = env.Run(new FakeSession(Report((a, [1], [1, 2]))));
+        var rows = Enumerable.Range(1, 3).Select(i => new TestResultUpdate(new TestId("tests/T/T.csproj", "Ns.C", "Theory", "same-uid", $"Theory({i})"),
+            $"Theory({i})", TestState.Failed, 1, null, null, null, null)).ToList();
+        var reruns = 0;
+
+        await run.ClassFinishedAsync("Ns.C", rows, CancellationToken.None);
+        await run.FinishedAsync((_, _) => { reruns++; return Task.FromResult(TestState.Failed); }, CancellationToken.None);
+
+        Assert.AreEqual(1, reruns);
+    }
+
+    [TestMethod]
+    public async Task A_timeout_cancellation_during_a_rerun_is_not_swallowed()
+    {
+        var env = new Env();
+        var a = env.MirrorFile("src/Prod/A.cs");
+        var run = env.Run(new FakeSession(Report((a, [1], [1, 2]))));
+
+        await run.ClassFinishedAsync("Ns.C", [Result("Bad", TestState.Failed)], CancellationToken.None);
+        // The caller's own token is not cancelled: the cancellation came from the runner's watchdog.
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
+            run.FinishedAsync((_, _) => throw new OperationCanceledException("watchdog"), CancellationToken.None));
+
+        Assert.IsNull(run.Pass);
     }
 
     [TestMethod]
@@ -140,7 +187,8 @@ public class CoverageRunTests
 
         await run.ClassFinishedAsync("Ns.C", [Result("Bad", TestState.Failed)], cts.Token);
         await cts.CancelAsync();
-        await run.FinishedAsync((_, ct) => { ct.ThrowIfCancellationRequested(); return Task.FromResult(TestState.Failed); }, cts.Token);
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
+            run.FinishedAsync((_, ct) => { ct.ThrowIfCancellationRequested(); return Task.FromResult(TestState.Failed); }, cts.Token));
         await run.DisposeAsync();
 
         Assert.IsNull(run.Pass);
@@ -236,5 +284,72 @@ public class CoverageRunFactoryTests
 
         Assert.IsFalse(availability.Available);
         StringAssert.Contains(availability.Message, "dotnet tool install --global dotnet-coverage");
+    }
+
+    private sealed class FakeSessionForFactory(Exception? failInstrument = null) : ICoverageSession
+    {
+        public bool Disposed { get; private set; }
+        public Task InstrumentAsync(string dllPath, CancellationToken ct) => failInstrument is null ? Task.CompletedTask : Task.FromException(failInstrument);
+        public Task<string> SnapshotCoberturaAsync(CancellationToken ct) => Task.FromResult("<coverage/>");
+        public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
+    private sealed class FakeToolForFactory(ICoverageSession session) : ICoverageTool
+    {
+        public Task<ICoverageSession> StartSessionAsync(string workDir, CancellationToken ct) => Task.FromResult(session);
+    }
+
+    /// <summary>A test project with one production reference, its output folder on disk, and a factory over a fake tool.</summary>
+    private static async Task<(CoverageRunFactory factory, ProjectInfo project, ProjectGraph graph, string outputDir)> Scenario(ICoverageSession session)
+    {
+        var output = Path.Combine(TempDir.Create(), "bin", "Debug", "net10.0");
+        Directory.CreateDirectory(output);
+        foreach (var f in new[] { "T.dll", "A.dll", "A.pdb" }) File.WriteAllText(Path.Combine(output, f), f);
+        var test = new ProjectInfo("tests/T/T.csproj", "T", "/m/tests/T/T.csproj", true, true, Path.Combine(output, "T.dll"), ["src/A/A.csproj"], []);
+        var prod = new ProjectInfo("src/A/A.csproj", "A", "/m/src/A/A.csproj", false, false, Path.Combine(output, "A.dll"), [], []);
+        var root = TempDir.Create();
+        File.WriteAllText(Path.Combine(root, "S.slnx"), "");
+        var layout = RepoLayout.Resolve(Path.Combine(root, "S.slnx"));
+        var graph = await ProjectGraph.LoadAsync(layout, new NoCrunch.Engine.Tests.Graph.ProjectGraphTests.FakeQuery(test, prod), CancellationToken.None);
+        var factory = new CoverageRunFactory(new FakeToolForFactory(session), new CoverageAvailability(true, null),
+            new PathMap(layout.RepoRoot, layout.MirrorRoot), layout, (_, _) => Task.CompletedTask);
+        return (factory, test, graph, output);
+    }
+
+    [TestMethod]
+    public async Task StartAsync_cancelled_while_instrumenting_disposes_the_session_removes_the_copy_and_rethrows()
+    {
+        var session = new FakeSessionForFactory(new OperationCanceledException("cancelled"));
+        var (factory, project, graph, output) = await Scenario(session);
+
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => factory.StartAsync(project, graph, CancellationToken.None));
+
+        Assert.IsTrue(session.Disposed, "the collector session was stopped");
+        Assert.IsFalse(Directory.Exists(output + ".nccov"), "the copied output was removed");
+    }
+
+    [TestMethod]
+    public async Task StartAsync_failing_to_instrument_disposes_the_session_removes_the_copy_and_skips_coverage()
+    {
+        var session = new FakeSessionForFactory(new InvalidOperationException("cannot instrument"));
+        var (factory, project, graph, output) = await Scenario(session);
+
+        Assert.IsNull(await factory.StartAsync(project, graph, CancellationToken.None));
+
+        Assert.IsTrue(session.Disposed);
+        Assert.IsFalse(Directory.Exists(output + ".nccov"));
+    }
+
+    [TestMethod]
+    public async Task StartAsync_puts_the_copy_next_to_the_original_output_so_relative_paths_from_the_assembly_still_resolve()
+    {
+        var (factory, project, graph, output) = await Scenario(new FakeSessionForFactory());
+
+        await using var run = await factory.StartAsync(project, graph, CancellationToken.None);
+
+        Assert.AreEqual(Path.GetDirectoryName(output), Path.GetDirectoryName(Path.GetDirectoryName(run!.TargetPath)), "same depth as the original bin/Debug/net10.0");
+        Assert.AreEqual(Path.Combine(output + ".nccov", "T.dll"), run.TargetPath);
+        await run.DisposeAsync();
+        Assert.IsFalse(Directory.Exists(output + ".nccov"));
     }
 }

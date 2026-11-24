@@ -1,6 +1,7 @@
 package com.nocrunch.rider.ui
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class MarkerLinesTest {
@@ -56,5 +57,17 @@ class MarkerLinesTest {
 
         assertEquals(mapOf(1 to cause), layout(text, listOf(dash, cause)))
         assertEquals(mapOf(1 to pass), layout(text, listOf(dash, pass)))
+    }
+
+    @Test
+    fun layout_stays_fast_for_a_big_file_with_thousands_of_coverage_markers() {
+        val big = (1..20_000).joinToString("\n") { "line $it" }
+        val markers = (0 until 10_000).map { LineMarker(it, MarkerKind.PASS, "Hit only by passing tests") }
+
+        var result: Map<Int, LineMarker> = emptyMap()
+        val ms = kotlin.system.measureTimeMillis { result = layout(big, markers) }
+
+        assertEquals(10_000, result.size)
+        assertTrue(ms < 1_000, "layout took $ms ms: it must not rescan the whole text for every marker")
     }
 }

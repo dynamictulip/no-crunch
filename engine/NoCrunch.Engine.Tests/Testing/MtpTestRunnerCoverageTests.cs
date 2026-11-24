@@ -13,12 +13,15 @@ public class MtpTestRunnerCoverageTests
     private const string Flaky = "Shop.Core.Tests.FlakyTests";
     private static MirroredSample _sample = null!;
     private static string _probeFile = null!;
+    /// <summary>The injected hanging test only hangs while this file exists, so runs of the whole project are not affected.</summary>
+    private static string _hangFile = null!;
 
     [ClassInitialize]
     public static async Task Init(TestContext _)
     {
         _sample = await MirroredSample.CreateAsync();
         _probeFile = Path.Combine(Path.GetTempPath(), "nocrunch-probe-" + Guid.NewGuid().ToString("N") + ".txt");
+        _hangFile = Path.Combine(Path.GetTempPath(), "nocrunch-hang-" + Guid.NewGuid().ToString("N") + ".flag");
         File.WriteAllText(Path.Combine(_sample.Layout.MirrorRoot, "tests/Shop.Core.Tests/InjectedCoverageTests.cs"), $$"""
             namespace Shop.Core.Tests;
 
@@ -28,6 +31,13 @@ public class MtpTestRunnerCoverageTests
                 private static int _calls;
                 [TestMethod] public void Fails_first_then_passes() { if (Interlocked.Increment(ref _calls) == 1) Assert.Fail("first time"); }
                 [TestMethod] public void Always_fails() => Assert.Fail("always");
+            }
+
+            [TestClass]
+            public class RerunHangTests
+            {
+                private static int _calls;
+                [TestMethod] public void Fails_then_hangs() { if (Interlocked.Increment(ref _calls) == 1) Assert.Fail("first time"); if (File.Exists(@"{{_hangFile}}")) Thread.Sleep(System.Threading.Timeout.Infinite); }
             }
 
             [TestClass]
@@ -167,5 +177,23 @@ public class MtpTestRunnerCoverageTests
         Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
         Assert.IsNull(outcome.Error);
         Assert.AreEqual(TestState.Passed, updates.Last(u => u.Id.Method == "Writes_base_directory").State);
+    }
+
+    [TestMethod]
+    [Timeout(300_000)]
+    public async Task A_rerun_that_hangs_trips_the_test_timeout_and_the_run_reports_it()
+    {
+        var coverage = OwnTarget(Core);
+        File.WriteAllText(_hangFile, "");
+
+        (ProjectRunOutcome outcome, List<TestResultUpdate> updates) result;
+        try { result = await Run(Core, coverage, id => id.Type == "Shop.Core.Tests.RerunHangTests", timeout: TimeSpan.FromSeconds(3)); }
+        finally { File.Delete(_hangFile); }
+        var (outcome, updates) = result;
+
+        Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status);
+        StringAssert.Contains(outcome.Error, "Timed out", "the hung rerun is reported as a timeout, not swallowed");
+        Assert.IsFalse(coverage.Finished, "coverage did not finish after the host was stopped");
+        Assert.AreEqual(TestState.Failed, updates.Last(u => u.Id.Method == "Fails_then_hangs").State);
     }
 }

@@ -113,7 +113,7 @@ public class CoverageEndToEndTests
         RequireTool();
         Assert.IsNotNull(_theoryPass, "the xUnit Theory test project got a pass");
         Assert.IsTrue(_theoryPass.Classes.Count > 0);
-        Assert.IsTrue(_theoryPass.Classes.SelectMany(c => c.Files.Values).Any(f => f.Hit.Count > 0));
+        Assert.IsTrue(_theoryPass.Classes.SelectMany(c => c.Files.Values).Any(hit => hit.Count > 0));
     }
 
     [TestMethod]

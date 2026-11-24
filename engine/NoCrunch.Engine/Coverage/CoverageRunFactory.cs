@@ -46,22 +46,33 @@ internal sealed class CoverageRunFactory(ICoverageTool? tool, CoverageAvailabili
             await log("info", $"Coverage for {project.RepoRelativePath} leaves out {string.Join(", ", targets.Missing.Select(p => p.Name))} (no DLL or PDB in the output).");
 
         var dir = Path.Combine(layout.StateDir, "coverage", project.RepoRelativePath.Replace('/', '_'));
-        var copyDir = Path.Combine(dir, "output");
+        // Next to the original output (same depth), so tests that find files relative to the assembly resolve the same way.
+        var copyDir = Path.TrimEndingDirectorySeparator(outputDir) + ".nccov";
         ICoverageSession? session = null;
+        var started = false;
         try
         {
             var app = CoverageTargets.CopyOutput(outputDir, copyDir, project.TargetPath);
             session = await tool.StartSessionAsync(Path.Combine(dir, "session"), ct);
             foreach (var dll in targets.DllNames) await session.InstrumentAsync(Path.Combine(copyDir, dll), ct);
+            started = true;
             return new CoverageRun(session, map, project.RepoRelativePath, app,
                 targets.Production.Select(p => p.RepoRelativePath).ToList(), log, copyDir);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            if (session is not null) await session.DisposeAsync();
-            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch (IOException) { }
             await log("warning", $"Coverage skipped for {project.RepoRelativePath}: {ex.Message}");
             return null;
+        }
+        finally
+        {
+            // A failed or cancelled start leaves nothing behind: no collector process and no copied output.
+            if (!started)
+            {
+                if (session is not null) await session.DisposeAsync();
+                try { if (Directory.Exists(copyDir)) Directory.Delete(copyDir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
         }
     }
 }

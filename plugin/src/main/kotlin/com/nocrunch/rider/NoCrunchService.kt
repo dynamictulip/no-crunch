@@ -61,8 +61,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     private val _builds = MutableStateFlow<Map<String, ProjectBuild>>(emptyMap())
     private val _runs = MutableStateFlow<Map<String, RunFinishedDto>>(emptyMap())
     private val _exclusions = MutableStateFlow<List<ExclusionRuleDto>>(emptyList())
-    private val _coverage = MutableStateFlow<Map<String, CoverageFileDto>>(emptyMap())
-    private val _coverageStatus = MutableStateFlow<CoverageStatusDto?>(null)
+    private val coverageState = CoverageState()
     private val coverageNoticeShown = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val state: StateFlow<EngineUiState> = _state.asStateFlow()
@@ -72,9 +71,9 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     val runs: StateFlow<Map<String, RunFinishedDto>> = _runs.asStateFlow()
     val exclusions: StateFlow<List<ExclusionRuleDto>> = _exclusions.asStateFlow()
     /** Line states per absolute file path from the engine's latest coverage pass. */
-    val coverage: StateFlow<Map<String, CoverageFileDto>> = _coverage.asStateFlow()
+    val coverage: StateFlow<Map<String, CoverageFileDto>> get() = coverageState.files
     /** Whether coverage is available, once the engine has said; null until then. */
-    val coverageStatus: StateFlow<CoverageStatusDto?> = _coverageStatus.asStateFlow()
+    val coverageStatus: StateFlow<CoverageStatusDto?> get() = coverageState.status
 
     /** Scope for UI collectors; cancelled when the project closes. */
     val scope: CoroutineScope get() = cs
@@ -106,6 +105,8 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
         val store = ExclusionStore.forSolution(solution).also { exclusionStore = it }
         _exclusions.value = store.load()
         _state.value = EngineUiState(EngineState.STARTING)
+        // Whatever the last engine sent is stale news now: a restart (say, with coverage switched off) must not leave its dots.
+        coverageState.reset()
 
         val settings = NoCrunchSettings.getInstance(project)
         val dotnet = settings.resolveDotnet()
@@ -212,9 +213,9 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
             }
             "testResults" -> gson.fromJson(params, TestResultsDto::class.java).let { r -> _tests.update { it + r.updates.associateBy { u -> u.key } } }
             "projectRunFinished" -> gson.fromJson(params, RunFinishedDto::class.java).let { r -> _runs.update { it + (r.project to r) } }
-            "coverageUpdated" -> gson.fromJson(params, CoverageUpdatedDto::class.java).let { d -> _coverage.value = d.files.associateBy { it.path } }
+            "coverageUpdated" -> gson.fromJson(params, CoverageUpdatedDto::class.java).let { d -> coverageState.replaceFiles(d.files) }
             "coverageStatus" -> gson.fromJson(params, CoverageStatusDto::class.java).let { status ->
-                _coverageStatus.value = status
+                coverageState.setStatus(status)
                 CoverageNotice.text(status)?.let(::tellCoverageUnavailable)
             }
             "log" -> gson.fromJson(params, LogDto::class.java).let { if (it.level == "error" || it.level == "warning") log.warn(it.message) else log.info(it.message) }

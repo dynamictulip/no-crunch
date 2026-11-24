@@ -949,7 +949,8 @@ public class EngineCoreTests
 
     private static TestProjectPass CalcPass(string testProject = CoreTests) => new(
         testProject,
-        [new ClassCoverage("T", new Dictionary<string, LineSet> { [CalcCs] = new(new HashSet<int> { 1, 2, 3 }, new HashSet<int> { 1, 2 }) })],
+        [new ClassCoverage("T", new Dictionary<string, IReadOnlySet<int>> { [CalcCs] = new HashSet<int> { 1, 2 } })],
+        new Dictionary<string, IReadOnlySet<int>> { [CalcCs] = new HashSet<int> { 1, 2, 3 } },
         new Dictionary<string, IReadOnlySet<int>>(), new HashSet<string>(),
         new Dictionary<string, string> { [CalcCs] = "h" }, new HashSet<string> { Core });
 

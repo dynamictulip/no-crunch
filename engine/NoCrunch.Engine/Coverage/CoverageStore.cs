@@ -5,9 +5,8 @@ namespace NoCrunch.Engine.Coverage;
 /// <summary>Persists the coverage passes so line dots survive a restart. Same atomic write and tolerant load as the result store.</summary>
 public sealed class CoverageStore(string path)
 {
-    private sealed record LineSetDto(int[] Executable, int[] Hit);
-    private sealed record ClassDto(string TestClass, Dictionary<string, LineSetDto> Files);
-    private sealed record PassDto(string TestProject, List<ClassDto> Classes, Dictionary<string, int[]> FailingHit,
+    private sealed record ClassDto(string TestClass, Dictionary<string, int[]> Files);
+    private sealed record PassDto(string TestProject, List<ClassDto> Classes, Dictionary<string, int[]> Executable, Dictionary<string, int[]> FailingHit,
         string[] UnrefinedFailingClasses, Dictionary<string, string> FileHashes, string[] Assemblies, bool Stale);
 
     public IReadOnlyList<TestProjectPass> Load()
@@ -34,8 +33,8 @@ public sealed class CoverageStore(string path)
 
     private static PassDto ToDto(TestProjectPass p) => new(
         p.TestProject,
-        p.Classes.Select(c => new ClassDto(c.TestClass,
-            c.Files.ToDictionary(f => f.Key, f => new LineSetDto(f.Value.Executable.Order().ToArray(), f.Value.Hit.Order().ToArray())))).ToList(),
+        p.Classes.Select(c => new ClassDto(c.TestClass, c.Files.ToDictionary(f => f.Key, f => f.Value.Order().ToArray()))).ToList(),
+        p.Executable.ToDictionary(f => f.Key, f => f.Value.Order().ToArray()),
         p.FailingHit.ToDictionary(f => f.Key, f => f.Value.Order().ToArray()),
         p.UnrefinedFailingClasses.Order().ToArray(),
         p.FileHashes.ToDictionary(f => f.Key, f => f.Value),
@@ -44,8 +43,8 @@ public sealed class CoverageStore(string path)
 
     private static TestProjectPass FromDto(PassDto d) => new(
         d.TestProject,
-        d.Classes.Select(c => new ClassCoverage(c.TestClass,
-            c.Files.ToDictionary(f => f.Key, f => new LineSet(f.Value.Executable.ToHashSet(), f.Value.Hit.ToHashSet())))).ToList(),
+        d.Classes.Select(c => new ClassCoverage(c.TestClass, c.Files.ToDictionary(f => f.Key, f => (IReadOnlySet<int>)f.Value.ToHashSet()))).ToList(),
+        d.Executable.ToDictionary(f => f.Key, f => (IReadOnlySet<int>)f.Value.ToHashSet()),
         d.FailingHit.ToDictionary(f => f.Key, f => (IReadOnlySet<int>)f.Value.ToHashSet()),
         d.UnrefinedFailingClasses.ToHashSet(),
         d.FileHashes,

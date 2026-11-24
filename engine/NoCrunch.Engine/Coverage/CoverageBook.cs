@@ -1,11 +1,12 @@
 namespace NoCrunch.Engine.Coverage;
 
-/// <summary>What one test class hit: per repo-relative source file, its executable and hit lines.</summary>
-public sealed record ClassCoverage(string TestClass, IReadOnlyDictionary<string, LineSet> Files);
+/// <summary>What one test class hit: per repo-relative source file, the lines it ran (files it did not touch are left out).</summary>
+public sealed record ClassCoverage(string TestClass, IReadOnlyDictionary<string, IReadOnlySet<int>> Files);
 
 /// <summary>
 /// One complete coverage pass over one test project.
 /// </summary>
+/// <param name="Executable">Repo-relative file to its executable lines, kept once for the pass (not per class).</param>
 /// <param name="FailingHit">Repo-relative file to the lines hit by failing tests that were rerun alone.</param>
 /// <param name="UnrefinedFailingClasses">Classes with a failing test whose alone-rerun did not give usable data.</param>
 /// <param name="FileHashes">Repo-relative file to <see cref="ContentHash"/> of the file the pass was collected against.</param>
@@ -13,6 +14,7 @@ public sealed record ClassCoverage(string TestClass, IReadOnlyDictionary<string,
 public sealed record TestProjectPass(
     string TestProject,
     IReadOnlyList<ClassCoverage> Classes,
+    IReadOnlyDictionary<string, IReadOnlySet<int>> Executable,
     IReadOnlyDictionary<string, IReadOnlySet<int>> FailingHit,
     IReadOnlySet<string> UnrefinedFailingClasses,
     IReadOnlyDictionary<string, string> FileHashes,
@@ -74,7 +76,7 @@ public sealed class CoverageBook
     {
         List<TestProjectPass> passes;
         lock (_lock) passes = _passes.Values.ToList();
-        var files = passes.SelectMany(p => p.Classes).SelectMany(c => c.Files.Keys).Distinct(StringComparer.Ordinal)
+        var files = passes.SelectMany(p => p.Executable.Keys).Distinct(StringComparer.Ordinal)
             .OrderBy(f => f, StringComparer.Ordinal);
         var result = new List<FileMarkup>();
         foreach (var file in files)
@@ -85,7 +87,7 @@ public sealed class CoverageBook
     private static FileMarkup? MarkupFor(string file, List<TestProjectPass> passes,
         Func<string, IReadOnlySet<string>> ownersOf, Func<string, IReadOnlySet<string>> testProjectsCovering)
     {
-        var contributing = passes.Where(p => p.Classes.Any(c => c.Files.ContainsKey(file))).ToList();
+        var contributing = passes.Where(p => p.Executable.ContainsKey(file)).ToList();
         var hashes = contributing.Select(p => p.FileHashes.GetValueOrDefault(file)).Distinct().ToList();
         if (hashes.Count != 1 || hashes[0] is not { } hash) return null;
 
@@ -96,12 +98,12 @@ public sealed class CoverageBook
         foreach (var pass in contributing)
         {
             if (pass.FailingHit.TryGetValue(file, out var f)) failing.UnionWith(f);
+            executable.UnionWith(pass.Executable[file]);
             foreach (var cls in pass.Classes.Where(c => c.Files.ContainsKey(file)))
             {
                 var lines = cls.Files[file];
-                executable.UnionWith(lines.Executable);
-                hit.UnionWith(lines.Hit);
-                if (pass.UnrefinedFailingClasses.Contains(cls.TestClass)) unrefinedHit.UnionWith(lines.Hit);
+                hit.UnionWith(lines);
+                if (pass.UnrefinedFailingClasses.Contains(cls.TestClass)) unrefinedHit.UnionWith(lines);
             }
         }
 

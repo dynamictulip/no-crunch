@@ -13,6 +13,8 @@ internal sealed class CoverageRun : ICoverageRun
     private readonly Func<string, string, Task> _log;
     private readonly string? _copyDir;
     private readonly List<ClassCoverage> _classes = [];
+    /// <summary>Executable lines per repo-relative file, kept once however many classes report them.</summary>
+    private readonly Dictionary<string, HashSet<int>> _executable = new(StringComparer.Ordinal);
     private readonly List<(string TestClass, TestResultUpdate Test)> _failing = [];
     private bool _failed;
 
@@ -40,12 +42,20 @@ internal sealed class CoverageRun : ICoverageRun
         try
         {
             var files = await SnapshotAsync(ct);
-            _classes.Add(new ClassCoverage(testClass, files));
-            foreach (var r in results.Where(r => r.State == TestState.Failed)) _failing.Add((testClass, r));
+            var hits = new Dictionary<string, IReadOnlySet<int>>(StringComparer.Ordinal);
+            foreach (var (file, lines) in files)
+            {
+                if (!_executable.TryGetValue(file, out var executable)) _executable[file] = executable = [];
+                executable.UnionWith(lines.Executable);
+                if (lines.Hit.Count > 0) hits[file] = lines.Hit;
+            }
+            _classes.Add(new ClassCoverage(testClass, hits));
+            // Rows of a theory share its UID, and rerunning the UID runs every row: once is enough.
+            foreach (var r in results.Where(r => r.State == TestState.Failed && !_failing.Any(f => f.Test.Id.Uid == r.Id.Uid))) _failing.Add((testClass, r));
         }
         catch (Exception ex)
         {
-            await Fail($"Coverage snapshot after {testClass} failed: {ex.Message}", ex, ct);
+            await Fail($"Coverage snapshot after {testClass} failed: {ex.Message}", ex);
         }
     }
 
@@ -74,7 +84,7 @@ internal sealed class CoverageRun : ICoverageRun
                         set.UnionWith(lines.Hit);
                     }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     unrefined.Add(testClass);
                     await _log("warning", $"Could not collect coverage for failing test {test.Id.Key}: {ex.Message}");
@@ -82,16 +92,19 @@ internal sealed class CoverageRun : ICoverageRun
                 }
             }
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
+            // Cancelled by the caller, or the runner's inactivity watchdog stopped a hung rerun: either way there is no
+            // pass, and the runner must see the cancellation to stop the test host and report the timeout.
             _failed = true;
-            return;
+            throw;
         }
 
         Pass = new TestProjectPass(
             _testProject, _classes.ToList(),
+            _executable.ToDictionary(kv => kv.Key, kv => (IReadOnlySet<int>)kv.Value, StringComparer.Ordinal),
             failingHit.ToDictionary(kv => kv.Key, kv => (IReadOnlySet<int>)kv.Value, StringComparer.Ordinal),
-            unrefined, HashesOf(_classes.SelectMany(c => c.Files.Keys).Concat(failingHit.Keys)),
+            unrefined, HashesOf(_executable.Keys),
             _instrumented.ToHashSet(StringComparer.Ordinal));
     }
 
@@ -106,11 +119,11 @@ internal sealed class CoverageRun : ICoverageRun
         }
     }
 
-    private async Task Fail(string message, Exception ex, CancellationToken ct)
+    private async Task Fail(string message, Exception ex)
     {
         _failed = true;
         Pass = null;
-        if (!(ex is OperationCanceledException && ct.IsCancellationRequested)) await _log("warning", message);
+        await _log("warning", ex is OperationCanceledException ? message + " (cancelled or timed out)" : message);
     }
 
     private async Task<Dictionary<string, LineSet>> SnapshotAsync(CancellationToken ct)

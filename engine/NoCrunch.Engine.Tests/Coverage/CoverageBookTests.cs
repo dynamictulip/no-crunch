@@ -8,16 +8,18 @@ public class CoverageBookTests
     private const string Prod = "src/Prod.csproj";
     private const string File1 = "src/Prod/A.cs";
 
-    private static LineSet L(int[] executable, int[] hit) => new(executable.ToHashSet(), hit.ToHashSet());
-
     private static IReadOnlySet<int> Set(params int[] lines) => lines.ToHashSet();
 
-    private static TestProjectPass Pass(string testProject = "tests/T1.csproj", params ClassCoverage[] classes) => new(
-        testProject, classes, new Dictionary<string, IReadOnlySet<int>>(), new HashSet<string>(),
+    private sealed record Spec(string Name, int[] Executable, int[] Hit);
+
+    private static TestProjectPass Pass(string testProject = "tests/T1.csproj", params Spec[] classes) => new(
+        testProject,
+        classes.Select(c => new ClassCoverage(c.Name, new Dictionary<string, IReadOnlySet<int>> { [File1] = c.Hit.ToHashSet() })).ToList(),
+        new Dictionary<string, IReadOnlySet<int>> { [File1] = classes.SelectMany(c => c.Executable).ToHashSet() },
+        new Dictionary<string, IReadOnlySet<int>>(), new HashSet<string>(),
         new Dictionary<string, string> { [File1] = "h" }, new HashSet<string> { Prod });
 
-    private static ClassCoverage Class(string name, int[] executable, int[] hit) =>
-        new(name, new Dictionary<string, LineSet> { [File1] = L(executable, hit) });
+    private static Spec Class(string name, int[] executable, int[] hit) => new(name, executable, hit);
 
     private static IReadOnlyList<FileMarkup> Markup(CoverageBook book, params string[] coveringTestProjects) =>
         book.Markup(_ => new HashSet<string> { Prod }, _ => coveringTestProjects.Length == 0 ? new HashSet<string> { "tests/T1.csproj" } : coveringTestProjects.ToHashSet());
