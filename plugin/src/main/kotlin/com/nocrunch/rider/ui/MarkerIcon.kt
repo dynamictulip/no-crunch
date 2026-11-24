@@ -44,7 +44,7 @@ class MarkerIcon(private val kind: MarkerKind) : Icon {
                     g2.draw(diamond(u, 2.25))
                 }
                 MarkerKind.NOT_COVERED, MarkerKind.NOT_COVERED_STALE ->
-                    g2.fill(java.awt.geom.RoundRectangle2D.Double(2.5 * u, 6 * u, 9 * u, 2 * u, 2 * u, 2 * u))
+                    g2.fill(java.awt.geom.RoundRectangle2D.Double(2.5 * u, 5.5 * u, 9 * u, 3 * u, 3 * u, 3 * u))
                 MarkerKind.CAUSE -> {
                     g2.stroke = BasicStroke((3 * u).toFloat(), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
                     g2.draw(java.awt.geom.Line2D.Double(3 * u, 3 * u, 11 * u, 11 * u))
