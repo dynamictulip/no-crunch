@@ -126,6 +126,43 @@ public class MtpTestRunnerCoverageTests
 
     [TestMethod]
     [Timeout(300_000)]
+    public async Task Tests_report_when_the_coverage_target_is_a_copy_at_another_path()
+    {
+        // xUnit v3 derives test ids from the assembly's path, so a copy of the output reports different ids than the original.
+        var info = _sample.Graph.Projects.Single(p => p.Name == "Shop.Theory.Tests");
+        var outputDir = Path.GetDirectoryName(info.TargetPath!)!;
+        var copyDir = outputDir + ".copytest";
+        if (Directory.Exists(copyDir)) Directory.Delete(copyDir, true);
+        CopyDirectory(outputDir, copyDir);
+        try
+        {
+            var coverage = new RecordingCoverage(Path.Combine(copyDir, Path.GetFileName(info.TargetPath!)));
+
+            var (outcome, updates) = await Run("Shop.Theory.Tests", coverage);
+
+            Assert.AreEqual(ProjectRunStatus.Completed, outcome.Status, outcome.Error);
+            var originalUids = updates.Where(u => u.State == TestState.Queued).ToDictionary(u => u.Id.Key, u => u.Id.Uid);
+            var finals = updates.GroupBy(u => u.Id.Key).Select(g => g.Last()).Where(u => IsOutcome(u.State)).ToList();
+            Assert.IsTrue(finals.Count > 0, "no test reported an outcome");
+            // Run-time-row theories settle at the engine, not in runner updates; every other discovered test reports here.
+            var unreported = originalUids.Keys.Except(finals.Select(f => f.Id.Key)).Where(k => !k.Contains("RunTimeRowTheories")).ToList();
+            Assert.AreEqual(0, unreported.Count, "still queued: " + string.Join("; ", unreported));
+            Assert.IsTrue(finals.All(u => u.State == TestState.Passed), string.Join(",", finals.Select(u => u.State)));
+            foreach (var f in finals.Where(f => originalUids.ContainsKey(f.Id.Key)))
+                Assert.AreEqual(originalUids[f.Id.Key], f.Id.Uid, "results keep the ids the rest of the engine knows");
+        }
+        finally { Directory.Delete(copyDir, true); }
+    }
+
+    private static void CopyDirectory(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var f in Directory.GetFiles(from)) File.Copy(f, Path.Combine(to, Path.GetFileName(f)), true);
+        foreach (var d in Directory.GetDirectories(from)) CopyDirectory(d, Path.Combine(to, Path.GetFileName(d)));
+    }
+
+    [TestMethod]
+    [Timeout(300_000)]
     public async Task Finished_gets_a_RunAlone_that_reruns_one_test_and_returns_its_state()
     {
         var coverage = OwnTarget(Core);

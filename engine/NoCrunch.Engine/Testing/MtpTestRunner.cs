@@ -153,6 +153,14 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
         // While a failing test is rerun alone for coverage, its updates are kept here instead of being reported.
         string? aloneUid = null;
         var aloneStates = new Dictionary<string, TestState>(StringComparer.Ordinal);
+        // The coverage host runs a copy of the test app at another path, and some frameworks (xUnit v3) derive test ids
+        // from that path: the copy reports its own ids for the same tests. These translate to and from the ones the rest
+        // of the engine knows. Empty when the coverage host is the original.
+        var toCopy = new Dictionary<string, string>(StringComparer.Ordinal);
+        var toOriginal = new Dictionary<string, string>(StringComparer.Ordinal);
+        Dictionary<string, TestResultUpdate>? copyFound = null;
+        string? Original(string? uid) => uid is not null && toOriginal.TryGetValue(uid, out var o) ? o : uid;
+        string Copy(string uid) => toCopy.TryGetValue(uid, out var c) ? c : uid;
         using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct);
         // (Re)starts the inactivity timer. Only call under gate while not stopped (the source is disposed after that).
         void Arm()
@@ -169,13 +177,21 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
                     lock (gate)
                     {
                         if (stopped) return;
+                        if (copyFound is not null)
+                        {
+                            foreach (var change in e.Changes)
+                                if (IsTest(change) && change.ExecutionState == "discovered" && change.Uid is { } found)
+                                    copyFound[found] = ToUpdate(project, change, TestState.Discovered);
+                            return;
+                        }
                         Arm();
                         var batch = new List<TestResultUpdate>();
                         foreach (var change in e.Changes)
                         {
                             if (!IsTest(change) || change.Uid is null) continue;
+                            var uid = Original(change.Uid)!;
                             if (change.Node.TryGetValue("retry.is-superseded", out var superseded) && superseded is true) continue;
-                            if (aloneUid is not null && change.Uid == aloneUid)
+                            if (aloneUid is not null && uid == aloneUid)
                             {
                                 // A rerun for coverage: remember the outcome (a failing row makes the test failed), report nothing.
                                 var rerun = change.ExecutionState switch { "passed" => TestState.Passed, "skipped" => TestState.Skipped, "discovered" or "in-progress" or null => (TestState?)null, _ => TestState.Failed };
@@ -192,6 +208,7 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
                             };
                             if (state is not { } s) continue;
                             var u = ToUpdate(project, change, s);
+                            if (uid != change.Uid) u = u with { Id = u.Id with { Uid = uid } };
                             // A test renamed at discovery reports under its new key. (Rows of a theory share its UID
                             // but have their own display names, so they don't match the theory's original key.)
                             if (renamed.TryGetValue(u.Id.Uid, out var r) && u.Id.Key == r.OriginalKey) u = u with { Id = r.Id };
@@ -209,10 +226,31 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
                     return;
                 }
 
+                if (coverage.TargetPath != project.TargetPath)
+                {
+                    lock (gate) copyFound = [];
+                    await client.DiscoverTestsAsync(watchdog.Token);
+                    Dictionary<string, TestResultUpdate> onCopy;
+                    lock (gate) { onCopy = copyFound!; copyFound = null; }
+                    // Same test, same name: pair them up by the key they would have without a clash rename. Tests whose
+                    // keys clash are paired in discovery order when both hosts found the same number of them; otherwise
+                    // they are left out of the run rather than risk reporting a result against the wrong test.
+                    string RawKey(TestResultUpdate t) => renamed.TryGetValue(t.Id.Uid, out var r) ? r.OriginalKey : t.Id.Key;
+                    var originals = queued.GroupBy(RawKey, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Select(t => t.Id.Uid).Distinct(StringComparer.Ordinal).ToList(), StringComparer.Ordinal);
+                    foreach (var g in onCopy.Values.GroupBy(t => t.Id.Key, StringComparer.Ordinal))
+                    {
+                        if (!originals.TryGetValue(g.Key, out var origUids)) continue;
+                        var copyUids = g.Select(t => t.Id.Uid).ToList();
+                        if (origUids.Count != copyUids.Count) continue;
+                        for (var i = 0; i < copyUids.Count; i++) { toCopy[origUids[i]] = copyUids[i]; toOriginal[copyUids[i]] = origUids[i]; }
+                    }
+                    lock (gate) Arm();
+                }
+
                 // With coverage: one class at a time on this host, a snapshot after each, then failing tests alone.
                 foreach (var slice in queued.GroupBy(q => q.Id.Type ?? "").ToList())
                 {
-                    await client.RunTestsAsync(slice.Select(q => q.Id.Uid).Distinct(StringComparer.Ordinal).ToList(), watchdog.Token);
+                    await client.RunTestsAsync(slice.Select(q => Copy(q.Id.Uid)).Distinct(StringComparer.Ordinal).ToList(), watchdog.Token);
                     List<TestResultUpdate> results;
                     lock (gate) results = latest.Values.Where(r => (r.Id.Type ?? "") == slice.Key && r.IsOutcome).ToList();
                     await CoverageCallAsync(token => coverage.ClassFinishedAsync(slice.Key.Length == 0 ? "(no class)" : slice.Key, results, token));
@@ -221,7 +259,7 @@ public sealed class MtpTestRunner(PathMap map, TimeSpan? testTimeout = null) : N
                 await coverage.FinishedAsync(async (test, _) =>
                 {
                     lock (gate) { aloneUid = test.Id.Uid; aloneStates.Remove(test.Id.Uid); }
-                    try { await client.RunTestsAsync([test.Id.Uid], watchdog.Token); }
+                    try { await client.RunTestsAsync([Copy(test.Id.Uid)], watchdog.Token); }
                     finally { lock (gate) aloneUid = null; }
                     lock (gate)
                     {
