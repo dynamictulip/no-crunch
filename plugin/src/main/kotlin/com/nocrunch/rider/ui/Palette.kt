@@ -22,8 +22,8 @@ object Palette {
     /** The stock failed-test icon's red, looked up each time it is used so a theme change takes effect. */
     val FAIL: JBColor = JBColor.lazy { StockIconColour.failedTestRed() ?: FAIL_FALLBACK }
 
-    /** Lines no test covers: a neutral grey, so it is the shape (a dash) that says it, not a hue. */
-    val NOT_COVERED: JBColor = JBColor(Color(0x7D828C), Color(0x9DA0A8))
+    /** Lines no test covers: a neutral near-black (light theme) or near-white (dark theme), so it is the shape (a dash) that says it, not a hue. */
+    val NOT_COVERED: JBColor = JBColor(Color(0x2B2D30), Color(0xE6E8EB))
 
     /** Same colour, see-through: for results from an earlier run (stale). */
     fun faded(c: Color): Color = ColorUtil.withAlpha(c, 0.55)
