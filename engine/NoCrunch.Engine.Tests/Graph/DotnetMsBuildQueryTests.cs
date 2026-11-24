@@ -21,7 +21,10 @@ public class DotnetMsBuildQueryTests
 
         var graph = await ProjectGraph.LoadAsync(layout, query, CancellationToken.None);
 
-        Assert.AreEqual(7, graph.Projects.Count);
+        Assert.AreEqual(9, graph.Projects.Count);
+        // Projects that get MTP from a package (xUnit, NUnit) only say so once restored, which the engine does before it queries.
+        foreach (var name in new[] { "Shop.Xunit.Tests", "Shop.NUnit.Tests" })
+            Assert.AreEqual(1, graph.Projects.Count(p => p.Name == name), name);
         var coreTests = graph.Projects.Single(p => p.Name == "Shop.Core.Tests");
         Assert.IsTrue(coreTests.IsMtp);
         Assert.IsTrue(coreTests.IsTestProject);

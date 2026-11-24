@@ -91,16 +91,25 @@ public class EngineServerEndToEndTests
             CollectionAssert.AreEquivalent(new[]
             {
                 "src/Shop.Core/Shop.Core.csproj", "tests/Shop.Core.Tests/Shop.Core.Tests.csproj",
+                "tests/Shop.Xunit.Tests/Shop.Xunit.Tests.csproj", "tests/Shop.NUnit.Tests/Shop.NUnit.Tests.csproj",
             }, built.ToArray());
 
             var finals = client.Updates().Where(u => (string?)u["state"] is "passed" or "failed").ToList();
             Assert.IsTrue(finals.Count > 0);
-            Assert.IsTrue(finals.All(u => (string?)u["project"] == "tests/Shop.Core.Tests/Shop.Core.Tests.csproj"),
+            // Every test project that depends on Shop.Core reruns: MSTest, xUnit and NUnit.
+            var coreDependents = new[] { "Shop.Core.Tests", "Shop.Xunit.Tests", "Shop.NUnit.Tests" }.Select(n => $"tests/{n}/{n}.csproj").ToHashSet();
+            Assert.IsTrue(finals.All(u => coreDependents.Contains((string)u["project"]!)),
                 string.Join("\n", finals.Select(f => f.ToJsonString())));
-            var failed = finals.Single(u => (string?)u["method"] == "Total_multiplies");
-            Assert.AreEqual("failed", (string?)failed["state"]);
-            Assert.IsFalse(((string?)failed["stackTrace"] ?? "").Contains(".nocrunch"));
-            StringAssert.StartsWith((string?)failed["filePath"], NoCrunch.Engine.Layout.RealPath.Of(repo));
+            foreach (var project in coreDependents)
+            {
+                var matching = finals.Where(u => (string?)u["project"] == project && ((string?)u["method"] ?? (string?)u["displayName"]) == "Total_multiplies").ToList();
+                Assert.AreEqual(1, matching.Count, project + " in: " + string.Join(" | ", finals.Select(f => $"{(string?)f["project"]}:{(string?)f["method"]}:{(string?)f["state"]}")));
+                var failed = matching.Single();
+                Assert.AreEqual("failed", (string?)failed["state"], project);
+                Assert.IsFalse(((string?)failed["stackTrace"] ?? "").Contains(".nocrunch"), project);
+                // NUnit's MTP nodes carry no source location, so its tests have no method or file path to check.
+                if (!project.Contains("NUnit")) StringAssert.StartsWith((string?)failed["filePath"], NoCrunch.Engine.Layout.RealPath.Of(repo), project);
+            }
 
             await rpc.InvokeAsync("shutdown");
         }
