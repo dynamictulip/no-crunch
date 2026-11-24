@@ -1,10 +1,14 @@
 using NoCrunch.Engine.Build;
+using NoCrunch.Engine.Coverage;
 using NoCrunch.Engine.Graph;
 using NoCrunch.Engine.Testing;
 
 namespace NoCrunch.Engine.Core;
 
 public enum EngineState { Idle, Syncing, Building, Testing, Paused }
+
+/// <summary>Whether line coverage can be collected; <see cref="Message"/> says why not (and how to fix it) when it can't.</summary>
+public sealed record CoverageAvailability(bool Available, string? Message);
 
 /// <summary>Everything the engine reports outward (to the plugin, via the protocol).</summary>
 public interface IEngineEvents
@@ -17,6 +21,9 @@ public interface IEngineEvents
     Task TestResults(IReadOnlyList<TestResultUpdate> updates);
     Task ProjectRunFinished(ProjectRunOutcome outcome);
     Task Log(string level, string message);
+    /// <summary>The complete current line states (replaces any earlier set). <see cref="FileMarkup.Path"/> is the absolute repo path.</summary>
+    Task CoverageUpdated(IReadOnlyList<FileMarkup> files) => Task.CompletedTask;
+    Task CoverageStatus(CoverageAvailability availability) => Task.CompletedTask;
 }
 
 public interface IBuildStep

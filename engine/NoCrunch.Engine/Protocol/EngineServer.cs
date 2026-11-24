@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using NoCrunch.Engine.Build;
 using NoCrunch.Engine.Core;
+using NoCrunch.Engine.Coverage;
 using NoCrunch.Engine.Graph;
 using NoCrunch.Engine.Layout;
 using NoCrunch.Engine.Testing;
@@ -13,7 +14,8 @@ namespace NoCrunch.Engine.Protocol;
 /// <param name="TestTimeoutSeconds">
 /// Stop a test run that reports nothing for this many seconds and fail its unfinished tests. Absent = 30; 0 = no timeout.
 /// </param>
-public sealed record InitializeParams(string SolutionPath, string? DotnetPath, int MaxParallel, int DebounceMs, int? TestTimeoutSeconds = null);
+/// <param name="Coverage">Collect line coverage. Absent = on (when <c>dotnet-coverage</c> is available); false = off.</param>
+public sealed record InitializeParams(string SolutionPath, string? DotnetPath, int MaxParallel, int DebounceMs, int? TestTimeoutSeconds = null, bool? Coverage = null);
 public sealed record InitializeResult(int ProtocolVersion, string RepoRoot, string MirrorRoot);
 public sealed record FilesChangedParams(string[] Paths);
 public sealed record SetExclusionsParams(ExclusionRule[] Rules);
@@ -183,6 +185,14 @@ public sealed class EngineServer : IEngineEvents, IAsyncDisposable
 
     Task IEngineEvents.ProjectRunFinished(ProjectRunOutcome o) =>
         Notify("projectRunFinished", new { project = o.Project, status = o.Status, error = o.Error });
+
+    Task IEngineEvents.CoverageUpdated(IReadOnlyList<FileMarkup> files) =>
+        Notify("coverageUpdated", new
+        {
+            files = files.Select(f => new { path = f.Path, hash = f.Hash, stale = f.Stale, notCovered = f.NotCovered, passing = f.Passing, failing = f.Failing }).ToList(),
+        });
+
+    Task IEngineEvents.CoverageStatus(CoverageAvailability a) => Notify("coverageStatus", new { available = a.Available, message = a.Message });
 
     Task IEngineEvents.Log(string level, string message)
     {
