@@ -39,4 +39,12 @@ public class CoberturaParserTests
         Assert.AreEqual(0, CoberturaParser.Parse(Report("", "")).Count);
         Assert.AreEqual(0, CoberturaParser.Parse("").Count);
     }
+
+    [TestMethod]
+    public void A_leading_byte_order_mark_is_tolerated()
+    {
+        var xml = "\uFEFF" + Report("", Class("/m/A.cs", (1, 1)));
+
+        Assert.AreEqual(1, CoberturaParser.Parse(xml).Count);
+    }
 }

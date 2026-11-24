@@ -12,8 +12,8 @@ internal static class CoberturaParser
     public static IReadOnlyDictionary<string, LineSet> Parse(string coberturaXml)
     {
         var result = new Dictionary<string, (HashSet<int> Executable, HashSet<int> Hit)>(StringComparer.Ordinal);
-        if (string.IsNullOrWhiteSpace(coberturaXml)) return new Dictionary<string, LineSet>();
-        var doc = XDocument.Parse(coberturaXml);
+        if (string.IsNullOrWhiteSpace(coberturaXml.TrimStart('\uFEFF'))) return new Dictionary<string, LineSet>();
+        var doc = XDocument.Parse(coberturaXml.TrimStart('\uFEFF'));
         var source = doc.Descendants("source").Select(s => s.Value).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
         foreach (var cls in doc.Descendants("class"))
         {
