@@ -146,13 +146,31 @@ public class CoverageBookTests
     }
 
     [TestMethod]
-    public void File_is_omitted_when_contributing_passes_disagree_on_its_hash()
+    public void When_passes_disagree_on_a_files_hash_the_fresh_pass_is_shown_stale()
+    {
+        var book = new CoverageBook();
+        book.Replace(Pass("tests/T1.csproj", Class("C", [1, 2], [1])));
+        book.MarkStale(new HashSet<string> { "tests/T1.csproj" });
+        book.Replace(Pass("tests/T2.csproj", Class("C", [1, 2], [2])) with { FileHashes = new Dictionary<string, string> { [File1] = "other" } });
+
+        var m = Markup(book, "tests/T1.csproj", "tests/T2.csproj").Single();
+
+        Assert.AreEqual("other", m.Hash);
+        Assert.IsTrue(m.Stale, "another pass is still on the old text");
+        CollectionAssert.AreEqual(new[] { 2 }, m.Passing.ToArray());
+    }
+
+    [TestMethod]
+    public void When_only_stale_passes_disagree_on_a_files_hash_the_file_is_still_shown_stale()
     {
         var book = new CoverageBook();
         book.Replace(Pass("tests/T1.csproj", Class("C", [1], [1])));
         book.Replace(Pass("tests/T2.csproj", Class("C", [1], [1])) with { FileHashes = new Dictionary<string, string> { [File1] = "other" } });
+        book.MarkStale(new HashSet<string> { "tests/T1.csproj", "tests/T2.csproj" });
 
-        Assert.AreEqual(0, Markup(book, "tests/T1.csproj", "tests/T2.csproj").Count);
+        var m = Markup(book, "tests/T1.csproj", "tests/T2.csproj").Single();
+
+        Assert.IsTrue(m.Stale);
     }
 
     [TestMethod]

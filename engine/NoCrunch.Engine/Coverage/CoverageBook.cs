@@ -87,9 +87,17 @@ public sealed class CoverageBook
     private static FileMarkup? MarkupFor(string file, List<TestProjectPass> passes,
         Func<string, IReadOnlySet<string>> ownersOf, Func<string, IReadOnlySet<string>> testProjectsCovering)
     {
-        var contributing = passes.Where(p => p.Executable.ContainsKey(file)).ToList();
-        var hashes = contributing.Select(p => p.FileHashes.GetValueOrDefault(file)).Distinct().ToList();
-        if (hashes.Count != 1 || hashes[0] is not { } hash) return null;
+        var contributing = passes.Where(p => p.Executable.ContainsKey(file) && p.FileHashes.ContainsKey(file)).ToList();
+        if (contributing.Count == 0) return null;
+
+        // Test projects re-run one after another, so for a while they can disagree on the file's text. Show the freshest
+        // reading (fresh passes over stale ones, then the larger group) instead of dropping the dots, and call it stale.
+        var groups = contributing.GroupBy(p => p.FileHashes[file]).ToList();
+        var disagree = groups.Count > 1;
+        var best = groups.OrderByDescending(g => g.Count(p => !p.Stale)).ThenByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal).First();
+        var hash = best.Key;
+        contributing = best.ToList();
 
         var executable = new HashSet<int>();
         var hit = new HashSet<int>();
@@ -111,7 +119,7 @@ public sealed class CoverageBook
         var notCovered = NotCoveredAllowed(file, passes, ownersOf, testProjectsCovering)
             ? executable.Where(l => !hit.Contains(l) && !failing.Contains(l))
             : [];
-        var markup = new FileMarkup(file, hash, contributing.Any(p => p.Stale),
+        var markup = new FileMarkup(file, hash, disagree || contributing.Any(p => p.Stale),
             notCovered.Order().ToList(), passing.Order().ToList(), failing.Order().ToList());
         return markup.NotCovered.Count + markup.Passing.Count + markup.Failing.Count == 0 ? null : markup;
     }
