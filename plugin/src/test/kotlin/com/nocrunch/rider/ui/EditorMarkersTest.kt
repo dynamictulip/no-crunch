@@ -193,11 +193,11 @@ class EditorMarkersTest {
     }
 
     @Test
-    fun coverage_is_used_only_when_its_hash_matches_the_document() {
+    fun coverage_is_kept_but_marked_stale_when_the_document_has_changed() {
         val file = coverage().copy(hash = ContentHash.of("a\nb\n"))
 
         assertEquals(file, coverageFor("a\nb\n", file))
-        assertEquals(null, coverageFor("a\nb changed\n", file))
+        assertEquals(file.copy(stale = true), coverageFor("a\nb changed\n", file))
         assertEquals(null, coverageFor("a\nb\n", null))
     }
 

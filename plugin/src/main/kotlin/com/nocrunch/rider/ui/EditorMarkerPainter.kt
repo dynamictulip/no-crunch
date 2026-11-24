@@ -125,11 +125,12 @@ class EditorMarkerPainter(private val project: Project, scope: CoroutineScope) :
 }
 
 /**
- * The coverage to paint on a file whose open [text] is given, or null if there is none or the text no longer matches the
- * file the engine collected it against (edited since: line numbers would be wrong, so show nothing).
+ * The coverage to paint on a file whose open [text] is given, or null if there is none. If the text no longer matches the
+ * file the engine collected it against (edited since): still shown, but stale, so the dots go hollow instead of
+ * vanishing. Lines may have moved, which is what stale says.
  */
 fun coverageFor(text: CharSequence, file: CoverageFileDto?): CoverageFileDto? =
-    file?.takeIf { it.hash == ContentHash.of(text) }
+    file?.let { if (it.hash == ContentHash.of(text)) it else it.copy(stale = true) }
 
 /**
  * The 0-based line to paint [marker] on. A test's reported line is often an attribute like `[TestMethod]`, so a marker
