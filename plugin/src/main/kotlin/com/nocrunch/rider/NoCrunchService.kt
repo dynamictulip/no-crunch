@@ -2,6 +2,8 @@ package com.nocrunch.rider
 
 import com.google.gson.JsonObject
 import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
@@ -24,6 +26,7 @@ import com.nocrunch.rider.engine.StateChangedDto
 import com.nocrunch.rider.engine.TestResultsDto
 import com.nocrunch.rider.engine.TestResultDto
 import com.nocrunch.rider.engine.TestsDiscoveredDto
+import com.nocrunch.rider.ui.CoverageNotice
 import com.nocrunch.rider.exclusions.ExclusionStore
 import com.nocrunch.rider.files.MirrorFolderExcluder
 import com.nocrunch.rider.files.RepoPaths
@@ -60,6 +63,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     private val _exclusions = MutableStateFlow<List<ExclusionRuleDto>>(emptyList())
     private val _coverage = MutableStateFlow<Map<String, CoverageFileDto>>(emptyMap())
     private val _coverageStatus = MutableStateFlow<CoverageStatusDto?>(null)
+    private val coverageNoticeShown = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val state: StateFlow<EngineUiState> = _state.asStateFlow()
     val tests: StateFlow<Map<String, TestResultDto>> = _tests.asStateFlow()
@@ -209,9 +213,20 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
             "testResults" -> gson.fromJson(params, TestResultsDto::class.java).let { r -> _tests.update { it + r.updates.associateBy { u -> u.key } } }
             "projectRunFinished" -> gson.fromJson(params, RunFinishedDto::class.java).let { r -> _runs.update { it + (r.project to r) } }
             "coverageUpdated" -> gson.fromJson(params, CoverageUpdatedDto::class.java).let { d -> _coverage.value = d.files.associateBy { it.path } }
-            "coverageStatus" -> _coverageStatus.value = gson.fromJson(params, CoverageStatusDto::class.java)
+            "coverageStatus" -> gson.fromJson(params, CoverageStatusDto::class.java).let { status ->
+                _coverageStatus.value = status
+                CoverageNotice.text(status)?.let(::tellCoverageUnavailable)
+            }
             "log" -> gson.fromJson(params, LogDto::class.java).let { if (it.level == "error" || it.level == "warning") log.warn(it.message) else log.info(it.message) }
         }
+    }
+
+    /** Once per project session: coverage is off because dotnet-coverage is missing, and how to fix that. */
+    private fun tellCoverageUnavailable(text: String) {
+        if (coverageNoticeShown.getAndSet(true)) return
+        NotificationGroupManager.getInstance().getNotificationGroup("No Crunch")
+            .createNotification("No Crunch: line coverage is off", text, NotificationType.INFORMATION)
+            .notify(project)
     }
 
     private fun onEngineExit(proc: EngineProcess, code: Int) {

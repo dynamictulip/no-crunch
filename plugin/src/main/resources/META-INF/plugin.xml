@@ -15,6 +15,7 @@
         <toolWindow id="No Crunch" anchor="bottom" factoryClass="com.nocrunch.rider.ui.NoCrunchToolWindowFactory"
                     icon="/icons/cupcake.svg"/>
         <statusBarWidgetFactory id="NoCrunchStatus" implementation="com.nocrunch.rider.ui.NoCrunchStatusBarWidgetFactory"/>
+        <notificationGroup id="No Crunch" displayType="BALLOON"/>
         <projectConfigurable parentId="tools" instance="com.nocrunch.rider.settings.NoCrunchConfigurable"
                              id="com.nocrunch.rider.settings" displayName="No Crunch"/>
     </extensions>

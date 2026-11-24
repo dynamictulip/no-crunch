@@ -8,6 +8,7 @@ import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import com.nocrunch.rider.NoCrunchService
+import com.nocrunch.rider.ui.CoverageNotice
 
 class NoCrunchConfigurable(private val project: Project) : BoundConfigurable("No Crunch") {
     override fun createPanel(): DialogPanel {
@@ -23,6 +24,7 @@ class NoCrunchConfigurable(private val project: Project) : BoundConfigurable("No
                 checkBox("Collect line coverage").bindSelected({ state.enableCoverage }, { state.enableCoverage = it })
                     .comment("Shows which lines tests cover, as dots in the editor. Needs the dotnet-coverage tool; changes apply after the engine restarts.")
             }
+            CoverageNotice.text(NoCrunchService.getInstance(project).coverageStatus.value)?.let { notice -> row { comment(notice) } }
             row("dotnet executable (blank = auto):") {
                 textField().bindText({ state.dotnetPath.orEmpty() }, { state.dotnetPath = it })
                     .comment("Changes apply after the engine restarts.")
