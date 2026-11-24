@@ -6,6 +6,7 @@ import com.intellij.openapi.project.Project
 import com.nocrunch.rider.EngineUiState
 import com.nocrunch.rider.NoCrunchService
 import com.nocrunch.rider.ProjectBuild
+import com.nocrunch.rider.engine.CoverageFileDto
 import com.nocrunch.rider.engine.ExclusionRuleDto
 import com.nocrunch.rider.engine.RunFinishedDto
 import com.nocrunch.rider.engine.TestResultDto
@@ -30,6 +31,8 @@ data class ResultsSnapshot(
     val state: EngineUiState,
     /** Every project and test, before the tool window's view filters. */
     val projects: List<ProjectNode>,
+    /** The engine's latest line coverage per absolute file path. */
+    val coverage: Map<String, CoverageFileDto> = emptyMap(),
 ) {
     /** Counts of every test, shared by the progress bar, tool window icon and status bar widget so they agree. */
     val counts: Counts = ProgressBarModel.totals(projects)
@@ -62,12 +65,15 @@ class NoCrunchResults(project: Project, scope: CoroutineScope) {
     private val sources = SourceCache()
 
     val snapshots: StateFlow<ResultsSnapshot> =
-        combine(engine.tests, engine.builds, engine.runs, engine.exclusions, engine.state) { t, b, r, e, s -> Input(t, b, r, e, s) }
+        combine(
+            combine(engine.tests, engine.builds, engine.runs, engine.exclusions, engine.state) { t, b, r, e, s -> Input(t, b, r, e, s) },
+            engine.coverage,
+        ) { input, coverage -> input.copy(coverage = coverage) }
             .atSteadyRate()
             .map { i ->
                 val projects = TestTreeModel.buildAll(i.tests.values, i.builds, i.rules, i.runs, sources::paramNames)
                 sources.prune()
-                ResultsSnapshot(i.tests, i.builds, i.runs, i.rules, i.state, projects)
+                ResultsSnapshot(i.tests, i.builds, i.runs, i.rules, i.state, projects, i.coverage)
             }
             .flowOn(Dispatchers.Default)
             .stateIn(scope, SharingStarted.Eagerly, ResultsSnapshot.empty(engine.state.value))
@@ -78,6 +84,7 @@ class NoCrunchResults(project: Project, scope: CoroutineScope) {
         val runs: Map<String, RunFinishedDto>,
         val rules: List<ExclusionRuleDto>,
         val state: EngineUiState,
+        val coverage: Map<String, CoverageFileDto> = emptyMap(),
     )
 
     companion object {

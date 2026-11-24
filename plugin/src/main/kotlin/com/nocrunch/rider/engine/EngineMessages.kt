@@ -11,6 +11,8 @@ data class InitializeParams(
     val maxParallel: Int,
     val debounceMs: Int,
     val testTimeoutSeconds: Int? = null,
+    /** Collect line coverage (needs dotnet-coverage); null = engine default (on). */
+    val coverage: Boolean? = null,
 )
 
 data class InitializeResult(val protocolVersion: Int, val repoRoot: String, val mirrorRoot: String)
@@ -59,3 +61,23 @@ data class TestsDiscoveredDto(val project: String, val tests: List<TestResultDto
 data class TestResultsDto(val updates: List<TestResultDto>)
 
 data class LogDto(val level: String, val message: String)
+
+/**
+ * One source file's line states from the engine's coverage pass (1-based lines). [path] is the absolute repo path;
+ * [hash] is the content hash of the file the pass was collected against (see ContentHash); [stale] means the data is
+ * from before the latest edits. Lines in none of the lists have no marker.
+ */
+data class CoverageFileDto(
+    val path: String,
+    val hash: String,
+    val stale: Boolean,
+    val notCovered: List<Int>,
+    val passing: List<Int>,
+    val failing: List<Int>,
+)
+
+/** The complete current set: replaces whatever was sent before. */
+data class CoverageUpdatedDto(val files: List<CoverageFileDto>)
+
+/** [message] says why coverage is unavailable and how to fix it. */
+data class CoverageStatusDto(val available: Boolean, val message: String?)

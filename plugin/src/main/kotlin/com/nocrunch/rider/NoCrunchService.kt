@@ -8,6 +8,9 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.nocrunch.rider.engine.BuildFinishedDto
+import com.nocrunch.rider.engine.CoverageFileDto
+import com.nocrunch.rider.engine.CoverageStatusDto
+import com.nocrunch.rider.engine.CoverageUpdatedDto
 import com.nocrunch.rider.engine.EngineClient
 import com.nocrunch.rider.engine.EngineProcess
 import com.nocrunch.rider.engine.EngineState
@@ -55,6 +58,8 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     private val _builds = MutableStateFlow<Map<String, ProjectBuild>>(emptyMap())
     private val _runs = MutableStateFlow<Map<String, RunFinishedDto>>(emptyMap())
     private val _exclusions = MutableStateFlow<List<ExclusionRuleDto>>(emptyList())
+    private val _coverage = MutableStateFlow<Map<String, CoverageFileDto>>(emptyMap())
+    private val _coverageStatus = MutableStateFlow<CoverageStatusDto?>(null)
 
     val state: StateFlow<EngineUiState> = _state.asStateFlow()
     val tests: StateFlow<Map<String, TestResultDto>> = _tests.asStateFlow()
@@ -62,6 +67,10 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
     val builds: StateFlow<Map<String, ProjectBuild>> = _builds.asStateFlow()
     val runs: StateFlow<Map<String, RunFinishedDto>> = _runs.asStateFlow()
     val exclusions: StateFlow<List<ExclusionRuleDto>> = _exclusions.asStateFlow()
+    /** Line states per absolute file path from the engine's latest coverage pass. */
+    val coverage: StateFlow<Map<String, CoverageFileDto>> = _coverage.asStateFlow()
+    /** Whether coverage is available, once the engine has said; null until then. */
+    val coverageStatus: StateFlow<CoverageStatusDto?> = _coverageStatus.asStateFlow()
 
     /** Scope for UI collectors; cancelled when the project closes. */
     val scope: CoroutineScope get() = cs
@@ -110,7 +119,7 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
                 // the client's request timeout.)
                 if (!engine.adopt(proc, c)) { proc.stop(); return@launch }
                 val s = settings.state
-                val result = c.request("initialize", InitializeParams(solution.toString(), dotnet, s.maxParallel, s.debounceMs, s.testTimeoutSeconds),
+                val result = c.request("initialize", InitializeParams(solution.toString(), dotnet, s.maxParallel, s.debounceMs, s.testTimeoutSeconds, coverage = s.enableCoverage),
                     InitializeResult::class.java).get()
                 if (result.protocolVersion != PROTOCOL_VERSION) error("Engine protocol ${result.protocolVersion}, plugin expects $PROTOCOL_VERSION")
                 repoRoot = result.repoRoot
@@ -199,6 +208,8 @@ class NoCrunchService(private val project: Project, private val cs: CoroutineSco
             }
             "testResults" -> gson.fromJson(params, TestResultsDto::class.java).let { r -> _tests.update { it + r.updates.associateBy { u -> u.key } } }
             "projectRunFinished" -> gson.fromJson(params, RunFinishedDto::class.java).let { r -> _runs.update { it + (r.project to r) } }
+            "coverageUpdated" -> gson.fromJson(params, CoverageUpdatedDto::class.java).let { d -> _coverage.value = d.files.associateBy { it.path } }
+            "coverageStatus" -> _coverageStatus.value = gson.fromJson(params, CoverageStatusDto::class.java)
             "log" -> gson.fromJson(params, LogDto::class.java).let { if (it.level == "error" || it.level == "warning") log.warn(it.message) else log.info(it.message) }
         }
     }

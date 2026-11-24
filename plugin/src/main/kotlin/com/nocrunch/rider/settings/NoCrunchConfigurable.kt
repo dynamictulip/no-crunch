@@ -4,6 +4,7 @@ import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.ui.dsl.builder.bindIntText
+import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import com.nocrunch.rider.NoCrunchService
@@ -17,6 +18,10 @@ class NoCrunchConfigurable(private val project: Project) : BoundConfigurable("No
             row("Test timeout (seconds, 0 = none):") {
                 intTextField(0..86_400).bindIntText({ state.testTimeoutSeconds }, { state.testTimeoutSeconds = it })
                     .comment("A test run that reports no result for this long is stopped and its unfinished tests fail.")
+            }
+            row {
+                checkBox("Collect line coverage").bindSelected({ state.enableCoverage }, { state.enableCoverage = it })
+                    .comment("Shows which lines tests cover, as dots in the editor. Needs the dotnet-coverage tool; changes apply after the engine restarts.")
             }
             row("dotnet executable (blank = auto):") {
                 textField().bindText({ state.dotnetPath.orEmpty() }, { state.dotnetPath = it })

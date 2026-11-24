@@ -34,6 +34,8 @@ class NoCrunchSettingsState : BaseState() {
     var nameColouring by string(NameColouring.DEFAULT.name)
     /** Show test status markers in the editor gutter. */
     var showEditorMarkers by property(true)
+    /** Collect line coverage (needs the dotnet-coverage tool). Applies after the engine restarts. */
+    var enableCoverage by property(true)
 }
 
 @Service(Service.Level.PROJECT)

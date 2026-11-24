@@ -14,4 +14,9 @@ class NoCrunchSettingsStateTest {
     fun editor_markers_are_on_by_default() {
         assertTrue(NoCrunchSettingsState().showEditorMarkers)
     }
+
+    @Test
+    fun enable_coverage_defaults_on() {
+        assertTrue(NoCrunchSettingsState().enableCoverage)
+    }
 }
