@@ -2,6 +2,7 @@ package com.nocrunch.rider.ui
 
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.application.EDT
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import com.intellij.openapi.project.Project
@@ -16,8 +17,14 @@ class NoCrunchToolWindowFactory : ToolWindowFactory, DumbAware {
         NoCrunchResults.getInstance(toolWindow.project).snapshots
             .map { CupcakeIcon.variantFor(it.bar.colour, paused = it.state.state == com.nocrunch.rider.engine.EngineState.PAUSED) }
             .distinctUntilChanged()
-            .collect { variant ->
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.EDT) { toolWindow.setIcon(variant.icon) }
+            .collectLatest { variant ->
+                // An animated variant cycles its frames until the next variant arrives and cancels this block.
+                do {
+                    for (icon in variant.frames) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.EDT) { toolWindow.setIcon(icon) }
+                        if (variant.isAnimated) kotlinx.coroutines.delay(CupcakeIcon.FRAME_MILLIS)
+                    }
+                } while (variant.isAnimated)
             }
     }
 

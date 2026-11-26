@@ -13,12 +13,17 @@ class CupcakeIconTest {
     fun icon_follows_the_bar_colour() {
         assertEquals(CupcakeIcon.Variant.PASS, CupcakeIcon.variantFor(BarColour.PASSING))
         assertEquals(CupcakeIcon.Variant.FAIL, CupcakeIcon.variantFor(BarColour.FAILING))
-        assertEquals(CupcakeIcon.Variant.PLAIN, CupcakeIcon.variantFor(BarColour.RUNNING))
+        assertEquals(CupcakeIcon.Variant.WORKING, CupcakeIcon.variantFor(BarColour.RUNNING))
         assertEquals(CupcakeIcon.Variant.PLAIN, CupcakeIcon.variantFor(BarColour.NEUTRAL))
     }
 
-    private val files = CupcakeIcon.Variant.entries.flatMap { v ->
-        listOf("", "_dark", "@20x20", "@20x20_dark").map { v.path.replace(".svg", "$it.svg") }
+    private val files = CupcakeIcon.Variant.entries.flatMap { v -> v.paths }.flatMap { path ->
+        listOf("", "_dark", "@20x20", "@20x20_dark").map { path.replace(".svg", "$it.svg") }
+    }
+
+    @Test
+    fun only_the_working_variant_is_animated() {
+        assertEquals(listOf(CupcakeIcon.Variant.WORKING), CupcakeIcon.Variant.entries.filter { it.isAnimated })
     }
 
     @Test
